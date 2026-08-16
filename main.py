@@ -346,8 +346,9 @@ async def translation_worker(
                 english_text = (
                     response.choices[0].message.content or ""
                 ).strip()
+                translation_finished_at = time.perf_counter()
                 latency_ms = (
-                    time.perf_counter() - request_started_at
+                    translation_finished_at - request_started_at
                 ) * 1000
 
                 if not english_text:
@@ -358,7 +359,9 @@ async def translation_worker(
                 print(f"中文：{chinese_text}")
                 print(f"英文：{english_text}")
                 print(f"翻译耗时：{latency_ms:.0f} ms")
-                await translated_queue.put(english_text)
+                await translated_queue.put(
+                    (english_text, translation_finished_at)
+                )
 
             except APITimeoutError:
                 print("[Translation Error] 请求超时，请继续说下一句")
@@ -380,10 +383,21 @@ async def translation_worker(
         await client.close()
 
 
-def speak_sync(english_text: str) -> None:
-    """同步创建语音引擎并完整播放一句英文。"""
+def speak_sync(english_text: str) -> float | None:
+    """同步播放一句英文，并返回 TTS 首音事件的近似时间。"""
     # Windows 环境继续为每句创建新 Engine，保证连续多句可靠播放。
     tts_engine = pyttsx3.init()
+    first_audio_started_at = None
+
+    # started-word（开始朗读词语事件）是 pyttsx3 官方事件。
+    # 当前 Windows SAPI5 驱动会在语音流启动时触发第一次回调；
+    # 它不是扬声器硬件真正输出首帧的时间，只能作为 TTS 首音近似值。
+    def on_started_word(name: str, location: int, length: int) -> None:
+        nonlocal first_audio_started_at
+        if first_audio_started_at is None:
+            first_audio_started_at = time.perf_counter()
+
+    callback_token = tts_engine.connect("started-word", on_started_word)
 
     voices = tts_engine.getProperty("voices")
     english_voice = next(
@@ -396,8 +410,10 @@ def speak_sync(english_text: str) -> None:
 
     tts_engine.say(english_text)
     tts_engine.runAndWait()
+    tts_engine.disconnect(callback_token)
     tts_engine.stop()
     del tts_engine
+    return first_audio_started_at
 
 
 async def tts_worker(translated_queue: asyncio.Queue) -> None:
@@ -405,27 +421,39 @@ async def tts_worker(translated_queue: asyncio.Queue) -> None:
     print("TTS 已就绪：pyttsx3 英文语音")
 
     while True:
-        english_text = await translated_queue.get()
+        queue_item = await translated_queue.get()
 
-        if english_text is None:
+        if queue_item is None:
             print("[TTS] 播放任务结束")
             break
+
+        english_text, translation_finished_at = queue_item
 
         print("\n[TTS]")
         print(f"准备播放：{english_text}", flush=True)
         playback_started_at = time.perf_counter()
 
         try:
-            await asyncio.to_thread(speak_sync, english_text)
+            first_audio_started_at = await asyncio.to_thread(
+                speak_sync,
+                english_text,
+            )
         except Exception as error:
             print(f"[TTS Error] 播放失败：{type(error).__name__}")
             continue
 
-        playback_latency_ms = (
+        total_playback_ms = (
             time.perf_counter() - playback_started_at
         ) * 1000
         print("[TTS] 播放完成", flush=True)
-        print(f"TTS 播放耗时：{playback_latency_ms:.0f} ms")
+        if first_audio_started_at is not None:
+            ttfa_ms = (
+                first_audio_started_at - translation_finished_at
+            ) * 1000
+            print(f"TTFA: {ttfa_ms:.0f} ms（TTS 首音近似值）")
+        else:
+            print("TTFA: 无法获取 started-word 事件")
+        print(f"TTS Total Playback: {total_playback_ms:.0f} ms")
 
 
 async def main() -> None:
