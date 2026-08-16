@@ -58,9 +58,9 @@ HOTWORD_TEST_SENTENCES = [
     "我正在使用 OpenAI 的模型",
     "我正在使用 ChatGPT",
 ]
-# 当前 SenseVoiceSmall 推理代码不读取 FunASR 的通用 hotword 参数。
-# 因此 ON 模式只加载并记录词表，不伪造模型已经应用 Hotword Biasing（热词偏置）。
-SENSEVOICE_HOTWORD_BIASING_SUPPORTED = False
+HOTWORD_CORRECTION_THRESHOLD = 0.80  # 最佳候选至少达到此相似度才纠错
+HOTWORD_MARGIN_THRESHOLD = 0.10  # 最佳候选必须明显领先第二候选
+HOTWORD_MAX_PHRASE_TOKENS = 3  # 最多合并三个相邻英文 token（词元）
 MODEL_PATH = (
     Path(__file__).resolve().parent
     / "models"
@@ -787,6 +787,150 @@ def levenshtein_distance(reference: str, hypothesis: str) -> int:
     return previous_row[-1]
 
 
+def extract_english_candidates(text: str) -> list[dict]:
+    """提取 ASCII 英文 token，并组合相邻的短英文 phrase（短语）。"""
+    token_matches = list(re.finditer(r"[A-Za-z]+", text))
+    token_groups = []
+    current_group = []
+
+    for token_match in token_matches:
+        if not current_group:
+            current_group = [token_match]
+            continue
+
+        previous_match = current_group[-1]
+        separator = text[previous_match.end():token_match.start()]
+        if separator and separator.isspace():
+            current_group.append(token_match)
+        else:
+            token_groups.append(current_group)
+            current_group = [token_match]
+
+    if current_group:
+        token_groups.append(current_group)
+
+    candidates = []
+    for token_group in token_groups:
+        max_tokens = min(HOTWORD_MAX_PHRASE_TOKENS, len(token_group))
+        for phrase_size in range(1, max_tokens + 1):
+            for start_index in range(len(token_group) - phrase_size + 1):
+                end_index = start_index + phrase_size - 1
+                start = token_group[start_index].start()
+                end = token_group[end_index].end()
+                candidates.append(
+                    {
+                        "start": start,
+                        "end": end,
+                        "text": text[start:end],
+                    }
+                )
+
+    return candidates
+
+
+def normalized_edit_similarity(first_text: str, second_text: str) -> float:
+    """计算忽略空白、标点和英文大小写后的编辑距离相似度。"""
+    normalized_first = normalize_text(first_text)
+    normalized_second = normalize_text(second_text)
+    longest_length = max(len(normalized_first), len(normalized_second))
+    if longest_length == 0:
+        return 1.0
+
+    distance = levenshtein_distance(normalized_first, normalized_second)
+    return 1.0 - distance / longest_length
+
+
+def correct_hotwords(
+    text: str,
+    hotwords: list[str],
+) -> tuple[str, list[dict]]:
+    """仅用外部热词表保守修正英文片段，并保留每次修改的信息。"""
+    usable_hotwords = [word for word in hotwords if normalize_text(word)]
+    if not text or not usable_hotwords:
+        return text, []
+
+    correction_candidates = []
+    for english_candidate in extract_english_candidates(text):
+        similarity_scores = sorted(
+            (
+                (
+                    normalized_edit_similarity(
+                        english_candidate["text"],
+                        hotword,
+                    ),
+                    hotword,
+                )
+                for hotword in usable_hotwords
+            ),
+            reverse=True,
+        )
+        best_similarity, best_hotword = similarity_scores[0]
+        second_similarity = (
+            similarity_scores[1][0]
+            if len(similarity_scores) > 1
+            else 0.0
+        )
+        similarity_margin = best_similarity - second_similarity
+
+        # Threshold（阈值）和 Margin（领先幅度）都满足才修改。
+        # 如果不确定则保留 Raw ASR（原始识别结果），优先保证纠错精确率。
+        if (
+            best_similarity >= HOTWORD_CORRECTION_THRESHOLD
+            and similarity_margin >= HOTWORD_MARGIN_THRESHOLD
+            and english_candidate["text"] != best_hotword
+        ):
+            correction_candidates.append(
+                {
+                    **english_candidate,
+                    "replacement": best_hotword,
+                    "similarity": best_similarity,
+                }
+            )
+
+    # 优先选择相似度更高、覆盖范围更长的候选，避免重叠片段被重复修改。
+    correction_candidates.sort(
+        key=lambda item: (
+            -item["similarity"],
+            -(item["end"] - item["start"]),
+            item["start"],
+        )
+    )
+    selected_corrections = []
+    for correction in correction_candidates:
+        overlaps = any(
+            correction["start"] < selected["end"]
+            and correction["end"] > selected["start"]
+            for selected in selected_corrections
+        )
+        if not overlaps:
+            selected_corrections.append(correction)
+
+    corrected_text = text
+    for correction in sorted(
+        selected_corrections,
+        key=lambda item: item["start"],
+        reverse=True,
+    ):
+        corrected_text = (
+            corrected_text[:correction["start"]]
+            + correction["replacement"]
+            + corrected_text[correction["end"]:]
+        )
+
+    corrections = [
+        {
+            "original": correction["text"],
+            "replacement": correction["replacement"],
+            "similarity": round(correction["similarity"], 4),
+        }
+        for correction in sorted(
+            selected_corrections,
+            key=lambda item: item["start"],
+        )
+    ]
+    return corrected_text, corrections
+
+
 async def benchmark_worker(
     text_queue: asyncio.Queue,
     stop_event: asyncio.Event,
@@ -796,7 +940,7 @@ async def benchmark_worker(
     asr_model: str,
     test_sentences: list[str],
     benchmark_type: str,
-    hotword_enabled: bool,
+    correction_enabled: bool,
     hotwords: list[str],
 ) -> None:
     """逐句提示用户朗读，记录所选 ASR Provider 的最终结果。"""
@@ -817,13 +961,23 @@ async def benchmark_worker(
     inference_latency_count = 0
     speech_end_to_result_total = 0.0
     speech_end_to_result_count = 0
-    hotword_hit_count = 0
+    raw_hotword_hit_count = 0
+    corrected_hotword_hit_count = 0
     hotword_sample_count = 0
+    corrected_total_cer = 0.0
+    correction_count = 0
+    false_correction_count = 0
+    correction_improved_count = 0
+    correction_worsened_count = 0
+    correction_unchanged_count = 0
     stopped_early = False
 
     if benchmark_type == "english_hotword":
-        print("\n========== English Hotword Benchmark ==========")
-        print(f"Hotword Mode: {'ON' if hotword_enabled else 'OFF'}")
+        print("\n========== Hotword Correction Benchmark ==========")
+        print(
+            "Post Correction: "
+            f"{'ON' if correction_enabled else 'OFF'}"
+        )
         print(f"Hotword Count: {len(hotwords)}")
     else:
         print("\n========== ASR Benchmark Mode ==========")
@@ -864,9 +1018,22 @@ async def benchmark_worker(
                 if len(queue_item) > 3
                 else endpoint_latency_ms
             )
-            exact_match = recognized_text == target_text
+            raw_recognized_text = recognized_text
+            corrected_recognized_text = raw_recognized_text
+            corrections = []
+            if (
+                benchmark_type == "english_hotword"
+                and correction_enabled
+            ):
+                corrected_recognized_text, corrections = correct_hotwords(
+                    raw_recognized_text,
+                    hotwords,
+                )
+
+            exact_match = raw_recognized_text == target_text
             normalized_target = normalize_text(target_text)
-            normalized_recognized = normalize_text(recognized_text)
+            normalized_recognized = normalize_text(raw_recognized_text)
+            corrected_normalized = normalize_text(corrected_recognized_text)
             normalized_exact_match = (
                 normalized_target == normalized_recognized
             )
@@ -875,8 +1042,13 @@ async def benchmark_worker(
                 if benchmark_type == "english_hotword"
                 else None
             )
-            hotword_hit = (
+            raw_hotword_hit = (
                 normalize_text(target_hotword) in normalized_recognized
+                if target_hotword is not None
+                else None
+            )
+            corrected_hotword_hit = (
+                normalize_text(target_hotword) in corrected_normalized
                 if target_hotword is not None
                 else None
             )
@@ -884,24 +1056,66 @@ async def benchmark_worker(
                 normalized_target,
                 normalized_recognized,
             )
+            corrected_edit_distance = levenshtein_distance(
+                normalized_target,
+                corrected_normalized,
+            )
 
             # CER（字符错误率）通常用目标字符数作为分母。
             # 空目标且识别也为空时记为 0；只有识别文本时安全记为 1。
             if normalized_target:
                 cer = edit_distance / len(normalized_target)
+                corrected_cer = (
+                    corrected_edit_distance / len(normalized_target)
+                )
             else:
                 cer = 0.0 if not normalized_recognized else 1.0
+                corrected_cer = (
+                    0.0 if not corrected_normalized else 1.0
+                )
+
+            correction_improved = (
+                corrected_cer < cer
+                or (
+                    raw_hotword_hit is False
+                    and corrected_hotword_hit is True
+                    and corrected_cer <= cer
+                )
+            )
+            correction_worsened = (
+                not correction_improved
+                and (
+                    corrected_cer > cer
+                    or (
+                        raw_hotword_hit is True
+                        and corrected_hotword_hit is False
+                    )
+                )
+            )
+            false_correction = bool(corrections) and correction_worsened
 
             total_samples += 1
             if exact_match:
                 exact_match_count += 1
             if normalized_exact_match:
                 normalized_exact_match_count += 1
-            if hotword_hit is not None:
+            if raw_hotword_hit is not None:
                 hotword_sample_count += 1
-                if hotword_hit:
-                    hotword_hit_count += 1
+                if raw_hotword_hit:
+                    raw_hotword_hit_count += 1
+                if corrected_hotword_hit:
+                    corrected_hotword_hit_count += 1
             total_cer += cer
+            corrected_total_cer += corrected_cer
+            correction_count += len(corrections)
+            if false_correction:
+                false_correction_count += 1
+            if correction_improved:
+                correction_improved_count += 1
+            elif correction_worsened:
+                correction_worsened_count += 1
+            else:
+                correction_unchanged_count += 1
             if endpoint_latency_ms is not None:
                 endpoint_latency_total += endpoint_latency_ms
                 endpoint_latency_count += 1
@@ -916,20 +1130,39 @@ async def benchmark_worker(
 
             result = {
                 "benchmark_type": benchmark_type,
-                "hotword_enabled": hotword_enabled,
+                # 保留 hotword_enabled 兼容 V7.4 历史记录；
+                # V7.5 中它与 correction_enabled 含义相同，均表示后处理开关。
+                "hotword_enabled": correction_enabled,
+                "correction_enabled": correction_enabled,
                 "hotword_count": len(hotwords),
                 "asr_provider": asr_provider,
                 "asr_model": asr_model,
                 "target": target_text,
-                "recognized": recognized_text,
+                "recognized": raw_recognized_text,
+                "raw_recognized": raw_recognized_text,
+                "corrected_recognized": corrected_recognized_text,
                 "exact_match": exact_match,
                 "normalized_target": normalized_target,
                 "normalized_recognized": normalized_recognized,
+                "raw_normalized": normalized_recognized,
+                "corrected_normalized": corrected_normalized,
                 "normalized_exact_match": normalized_exact_match,
                 "target_hotword": target_hotword,
-                "hotword_hit": hotword_hit,
+                "hotword_hit": raw_hotword_hit,
+                "raw_hotword_hit": raw_hotword_hit,
+                "corrected_hotword_hit": corrected_hotword_hit,
                 "edit_distance": edit_distance,
                 "cer": cer,
+                "raw_cer": cer,
+                "corrected_edit_distance": corrected_edit_distance,
+                "corrected_cer": corrected_cer,
+                "corrections": corrections,
+                "correction_improved": correction_improved,
+                "correction_worsened": correction_worsened,
+                "correction_unchanged": (
+                    not correction_improved and not correction_worsened
+                ),
+                "false_correction": false_correction,
                 "endpoint_latency_ms": (
                     round(endpoint_latency_ms, 1)
                     if endpoint_latency_ms is not None
@@ -953,21 +1186,42 @@ async def benchmark_worker(
 
             print("目标：")
             print(target_text)
-            print("识别：")
-            print(recognized_text)
+            print("Raw ASR（原始识别）：")
+            print(raw_recognized_text)
+            if benchmark_type == "english_hotword":
+                print("Corrected（纠错后）：")
+                print(corrected_recognized_text)
             print("标准化目标：")
             print(normalized_target)
-            print("标准化识别：")
+            print("Raw 标准化识别：")
             print(normalized_recognized)
             print("Raw Exact Match:")
             print("PASS" if exact_match else "FAIL")
             print("Normalized Exact Match:")
             print("PASS" if normalized_exact_match else "FAIL")
-            print("CER:")
+            print("Raw CER:")
             print(f"{cer * 100:.2f}%")
+            if benchmark_type == "english_hotword":
+                print("Corrected CER:")
+                print(f"{corrected_cer * 100:.2f}%")
             if target_hotword is not None:
                 print(f"Target Hotword: {target_hotword}")
-                print(f"Hotword Hit: {'PASS' if hotword_hit else 'FAIL'}")
+                print(
+                    "Raw Hotword Hit: "
+                    f"{'PASS' if raw_hotword_hit else 'FAIL'}"
+                )
+                print(
+                    "Corrected Hotword Hit: "
+                    f"{'PASS' if corrected_hotword_hit else 'FAIL'}"
+                )
+                print(
+                    "Corrections: "
+                    + (
+                        json.dumps(corrections, ensure_ascii=False)
+                        if corrections
+                        else "[]"
+                    )
+                )
             if endpoint_latency_ms is not None:
                 print(f"Endpoint Latency: {endpoint_latency_ms:.0f} ms")
             else:
@@ -1005,6 +1259,9 @@ async def benchmark_worker(
         else 0.0
     )
     average_cer = total_cer / total_samples if total_samples else 0.0
+    average_corrected_cer = (
+        corrected_total_cer / total_samples if total_samples else 0.0
+    )
     average_endpoint_latency = (
         endpoint_latency_total / endpoint_latency_count
         if endpoint_latency_count
@@ -1020,20 +1277,28 @@ async def benchmark_worker(
         if speech_end_to_result_count
         else None
     )
-    hotword_hit_rate = (
-        hotword_hit_count / hotword_sample_count * 100
+    raw_hotword_hit_rate = (
+        raw_hotword_hit_count / hotword_sample_count * 100
+        if hotword_sample_count
+        else 0.0
+    )
+    corrected_hotword_hit_rate = (
+        corrected_hotword_hit_count / hotword_sample_count * 100
         if hotword_sample_count
         else 0.0
     )
 
     if benchmark_type == "english_hotword":
-        print("\n========== English Hotword Benchmark ==========")
+        print("\n========== Hotword Correction Benchmark ==========")
     else:
         print("\n========== Benchmark Summary ==========")
     print(f"ASR Provider: {provider_display_name}")
     print(f"ASR Model: {asr_model}")
     if benchmark_type == "english_hotword":
-        print(f"Hotword: {'ON' if hotword_enabled else 'OFF'}")
+        print(
+            "Post Correction: "
+            f"{'ON' if correction_enabled else 'OFF'}"
+        )
     print(f"Total Samples: {total_samples}")
     print("\nRaw Exact Match:")
     print(f"{exact_match_count} / {total_samples}")
@@ -1041,13 +1306,25 @@ async def benchmark_worker(
     print("\nNormalized Exact Match:")
     print(f"{normalized_exact_match_count} / {total_samples}")
     print(f"{normalized_exact_match_rate:.1f}%")
-    print("\nAverage CER:")
-    print(f"{average_cer * 100:.2f}%")
     if benchmark_type == "english_hotword":
-        print("\nHotword Hit:")
-        print(f"{hotword_hit_count} / {hotword_sample_count}")
-        print("\nHotword Hit Rate:")
-        print(f"{hotword_hit_rate:.1f}%")
+        print("\nRaw Average CER:")
+        print(f"{average_cer * 100:.2f}%")
+        print("\nCorrected Average CER:")
+        print(f"{average_corrected_cer * 100:.2f}%")
+        print("\nRaw Hotword Hit:")
+        print(f"{raw_hotword_hit_count} / {hotword_sample_count}")
+        print(f"{raw_hotword_hit_rate:.1f}%")
+        print("\nCorrected Hotword Hit:")
+        print(f"{corrected_hotword_hit_count} / {hotword_sample_count}")
+        print(f"{corrected_hotword_hit_rate:.1f}%")
+        print(f"\nCorrection Count: {correction_count}")
+        print(f"False Correction Count: {false_correction_count}")
+        print(f"Correction Improved: {correction_improved_count}")
+        print(f"Correction Worsened: {correction_worsened_count}")
+        print(f"Unchanged: {correction_unchanged_count}")
+    else:
+        print("\nAverage CER:")
+        print(f"{average_cer * 100:.2f}%")
     print("\nAverage Endpoint Latency:")
     if average_endpoint_latency is not None:
         print(f"{average_endpoint_latency:.0f} ms")
@@ -1114,17 +1391,17 @@ def choose_benchmark_type() -> str | None:
         print("输入无效，请输入 1 或 2")
 
 
-def choose_hotword_mode() -> bool | None:
-    """选择 Hotword OFF（关闭）或 ON（开启）测试标签。"""
-    print("\n请选择 Hotword 模式：")
-    print("1. Hotword OFF")
-    print("2. Hotword ON")
+def choose_correction_mode() -> bool | None:
+    """选择 Hotword Post Correction（热词后处理纠错）开关。"""
+    print("\n请选择 Hotword Post Correction 模式：")
+    print("1. Correction OFF")
+    print("2. Correction ON")
 
     while True:
         try:
             choice = input("请输入 1 或 2：").strip()
         except EOFError:
-            print("没有收到 Hotword 模式，程序结束")
+            print("没有收到 Correction 模式，程序结束")
             return None
 
         if choice == "1":
@@ -1140,7 +1417,7 @@ async def main() -> None:
         return
 
     benchmark_type = "general"
-    hotword_enabled = False
+    correction_enabled = False
     hotwords = []
     test_sentences = TEST_SENTENCES
 
@@ -1151,29 +1428,23 @@ async def main() -> None:
         benchmark_type = selected_benchmark_type
 
         if benchmark_type == "english_hotword":
-            selected_hotword_mode = choose_hotword_mode()
-            if selected_hotword_mode is None:
+            selected_correction_mode = choose_correction_mode()
+            if selected_correction_mode is None:
                 return
-            hotword_enabled = selected_hotword_mode
+            correction_enabled = selected_correction_mode
             hotwords = load_hotwords(HOTWORDS_PATH)
             test_sentences = HOTWORD_TEST_SENTENCES
-            print(f"Hotword Mode: {'ON' if hotword_enabled else 'OFF'}")
+            print(
+                "Hotword Post Correction: "
+                f"{'ON' if correction_enabled else 'OFF'}"
+            )
 
-            if hotword_enabled:
+            if correction_enabled:
                 print(f"[Hotword] 已加载 {len(hotwords)} 个热词")
-                if (
-                    ASR_PROVIDER == "sensevoice"
-                    and not SENSEVOICE_HOTWORD_BIASING_SUPPORTED
-                ):
-                    print(
-                        "[Hotword] 当前 SenseVoiceSmall 路径无法直接做真正 "
-                        "Hotword Biasing；不会向模型传入无效参数。"
-                    )
-                elif ASR_PROVIDER != "sensevoice":
-                    print(
-                        f"[Hotword] 当前 {ASR_PROVIDER} Benchmark 未接入"
-                        "真正 Hotword Biasing。"
-                    )
+                print("[Hotword] Post Correction enabled")
+                print(
+                    "[Hotword] 这是识别后纠错，不是模型级 Hotword Biasing。"
+                )
 
     if (
         run_mode == "2"
@@ -1229,7 +1500,7 @@ async def main() -> None:
                 benchmark_model_name,
                 test_sentences,
                 benchmark_type,
-                hotword_enabled,
+                correction_enabled,
                 hotwords,
             ),
             wait_for_stop(stop_event, microphone_ready),
