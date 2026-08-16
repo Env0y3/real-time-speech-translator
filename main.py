@@ -22,6 +22,8 @@ from vosk import KaldiRecognizer, Model, SetLogLevel
 PREFERRED_SAMPLE_RATE = 16_000  # Sample Rate（采样率）：每秒 16000 个样本
 CHANNELS = 1  # Channel（声道）：1 表示单声道
 CHUNK_DURATION_SECONDS = 0.2  # Chunk（音频块）：每块大约 200 ms
+VAD_RMS_THRESHOLD = 10.0  # RMS 高于此值时认为当前有人说话
+ENDPOINT_SILENCE_SECONDS = 0.6  # 连续静音达到此时长时认为一句话结束
 MODEL_PATH = (
     Path(__file__).resolve().parent
     / "models"
@@ -31,32 +33,12 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-v4-flash"
 
 # System Prompt（系统提示词）只定义单一的中译英职责。
+
 TRANSLATION_SYSTEM_PROMPT = (
     "你是一个实时中英翻译器。"
     "请把用户提供的中文准确、自然地翻译成英文。"
     "只输出英文翻译，不要解释，不要添加额外内容。"
 )
-
-# 以下假数据保留给 V0/V1；V2 的 main() 暂时不会启动假 ASR、翻译和 TTS。
-AUDIO_CHUNKS = [
-    "audio_chunk_1",
-    "audio_chunk_2",
-    "audio_chunk_3",
-]
-
-# V0 使用固定字典，模拟 ASR（自动语音识别）和翻译的处理结果。
-FAKE_ASR_RESULTS = {
-    "audio_chunk_1": "你好",
-    "audio_chunk_2": "我今天",
-    "audio_chunk_3": "想去深圳",
-}
-
-FAKE_TRANSLATION_RESULTS = {
-    "你好": "Hello",
-    "我今天": "Today I",
-    "想去深圳": "want to go to Shenzhen",
-}
-
 
 async def audio_worker(
     audio_queue: asyncio.Queue,
@@ -131,26 +113,6 @@ async def audio_worker(
         print("Audio Worker 已结束")
 
 
-async def audio_debug_worker(audio_queue: asyncio.Queue) -> None:
-    """消费真实音频块，打印大小和基础音量。"""
-    while True:
-        queue_item = await audio_queue.get()
-
-        if queue_item is None:
-            print("Audio Debug Worker 已结束")
-            break
-
-        audio_chunk, _, chunk_clock_time = queue_item
-
-        # RMS（均方根音量）：先平方、求平均，再开平方。
-        # float32 音频通常在 -1 到 1，乘 1000 只是让显示数值更直观。
-        rms = float(np.sqrt(np.mean(audio_chunk**2))) * 1000
-        print(
-            f"[Audio {chunk_clock_time}] Chunk: {audio_chunk.size} samples "
-            f"| RMS: {rms:.1f}"
-        )
-
-
 async def wait_for_stop(
     stop_event: asyncio.Event,
     microphone_ready: asyncio.Event,
@@ -179,6 +141,10 @@ async def asr_worker(
     print("ASR 已就绪：Vosk 中文流式识别")
 
     last_partial = ""
+    is_speaking = False
+    last_voice_time = None
+    speech_end_time = None
+    last_committed_text = None
 
     while True:
         queue_item = await audio_queue.get()
@@ -188,13 +154,22 @@ async def asr_worker(
             remaining_result = json.loads(recognizer.FinalResult())
             stable_text = remaining_result.get("text", "").strip()
 
-            if stable_text:
+            if stable_text and stable_text != last_committed_text:
                 result_time = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                print(f"[ASR Final {result_time}] {stable_text}")
-
-                # 只有 Stable Text（稳定文本）才能进入 text_queue，
-                # 避免下游以后重复翻译不断变化的部分结果。
+                if speech_end_time is not None:
+                    asr_final_wait_ms = (
+                        time.perf_counter() - speech_end_time
+                    ) * 1000
+                    print(
+                        f"[ASR Final {result_time}] {stable_text} "
+                        f"| ASR Final Wait: {asr_final_wait_ms:.0f} ms"
+                    )
+                else:
+                    print(f"[ASR Final {result_time}] {stable_text}")
                 await text_queue.put(stable_text)
+                last_committed_text = stable_text
+
+            speech_end_time = None
 
             # Sentinel（哨兵值）继续向文本下游传递。
             await text_queue.put(None)
@@ -208,21 +183,78 @@ async def asr_worker(
             f"| RMS: {rms:.1f}"
         )
 
-        # sounddevice 给出 float32 [-1, 1]；Vosk 需要原始 PCM16（16 位 PCM）bytes。
-        # PCM（脉冲编码调制）转换：限制范围、乘 32767、转 int16，再转 bytes。
+        # VAD（语音活动检测）：用 RMS 判断语音与静音，并用连续静音检测句尾。
+        vad_now = time.perf_counter()
+        if rms > VAD_RMS_THRESHOLD:
+            if not is_speaking:
+                # 新一句开始时清空上一段的防重复状态。
+                speech_end_time = None
+                last_committed_text = None
+            is_speaking = True
+            last_voice_time = vad_now
+        elif is_speaking and last_voice_time is not None:
+            silence_seconds = vad_now - last_voice_time
+            if silence_seconds >= ENDPOINT_SILENCE_SECONDS:
+                # 真实 Speech End 使用最后一次检测到语音的时间，而非检测时刻。
+                speech_end_time = last_voice_time
+                print(
+                    "[VAD] Speech End detected "
+                    f"| silence: {silence_seconds * 1000:.0f} ms"
+                )
+
+                # Partial 为空时不刷新识别器，继续让 Vosk 自动 Final 兜底。
+                endpoint_partial = json.loads(recognizer.PartialResult())
+                endpoint_candidate = endpoint_partial.get(
+                    "partial", ""
+                ).strip()
+
+                if endpoint_candidate:
+                    endpoint_result = json.loads(
+                        await asyncio.to_thread(recognizer.FinalResult)
+                    )
+                    endpoint_text = endpoint_result.get("text", "").strip()
+
+                    # FinalResult 会刷新当前段；Reset 后同一 recognizer
+                    # 可以从头继续接收下一句话。
+                    await asyncio.to_thread(recognizer.Reset)
+                    last_partial = ""
+
+                    if (
+                        endpoint_text
+                        and endpoint_text != last_committed_text
+                    ):
+                        last_committed_text = endpoint_text
+                        await text_queue.put(endpoint_text)
+                        endpoint_commit_latency_ms = (
+                            time.perf_counter() - speech_end_time
+                        ) * 1000
+                        result_time = datetime.now().strftime(
+                            "%H:%M:%S.%f"
+                        )[:-3]
+                        print(
+                            f"[ASR Endpoint Final {result_time}] "
+                            f"{endpoint_text} | Endpoint Commit Latency: "
+                            f"{endpoint_commit_latency_ms:.0f} ms"
+                        )
+
+                    speech_end_time = None
+
+                # 重置后，后续静音 Chunk 不会重复触发 Speech End。
+                is_speaking = False
+                last_voice_time = None
+
+        # float32 [-1, 1] 转为 Vosk 需要的 PCM16（16 位 PCM）bytes。
         pcm16_audio = (np.clip(audio_chunk, -1.0, 1.0) * 32767).astype(
             np.int16
         )
         pcm16_bytes = pcm16_audio.tobytes()
 
-        # 本地识别会使用 CPU，放进线程，避免阻塞麦克风所在的事件循环。
-        # Vosk 用基础 Endpointing（语句结束检测）判断一句话是否已经稳定。
+        # 本地识别放入线程，避免阻塞麦克风所在的事件循环。
         is_final = await asyncio.to_thread(
             recognizer.AcceptWaveform,
             pcm16_bytes,
         )
 
-        # Latency（延迟）是从当前 Chunk 入队到结果读取完成的近似值。
         latency_ms = (time.perf_counter() - chunk_created_at) * 1000
         result_time = datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
@@ -231,14 +263,30 @@ async def asr_worker(
             stable_text = final_result.get("text", "").strip()
             last_partial = ""
 
-            if stable_text:
-                print(
-                    f"[ASR Final {result_time}] {stable_text} "
-                    f"| 近似延迟: {latency_ms:.0f} ms"
-                )
+            if stable_text and stable_text != last_committed_text:
+                if speech_end_time is not None:
+                    asr_final_wait_ms = (
+                        time.perf_counter() - speech_end_time
+                    ) * 1000
+                    print(
+                        f"[ASR Final {result_time}] {stable_text} "
+                        f"| 近似延迟: {latency_ms:.0f} ms "
+                        f"| ASR Final Wait: {asr_final_wait_ms:.0f} ms"
+                    )
+                else:
+                    print(
+                        f"[ASR Final {result_time}] {stable_text} "
+                        f"| 近似延迟: {latency_ms:.0f} ms"
+                    )
                 await text_queue.put(stable_text)
+                last_committed_text = stable_text
+
+            # 当前 Vosk Final 已处理，避免旧的句尾时间被下一句话复用。
+            speech_end_time = None
+            is_speaking = False
+            last_voice_time = None
         else:
-            # Partial Result（部分识别结果）只用于观察实时变化，不进入文本队列。
+            # Partial Result（部分识别结果）只打印，不进入翻译队列。
             partial_result = json.loads(recognizer.PartialResult())
             partial_text = partial_result.get("partial", "").strip()
 
@@ -248,18 +296,6 @@ async def asr_worker(
                     f"| 近似延迟: {latency_ms:.0f} ms"
                 )
                 last_partial = partial_text
-
-
-async def text_debug_worker(text_queue: asyncio.Queue) -> None:
-    """验证只有稳定识别文本会进入 text_queue。"""
-    while True:
-        stable_text = await text_queue.get()
-
-        if stable_text is None:
-            print("Text Debug Worker 已结束")
-            break
-
-        print(f"[Text Queue] 收到稳定文本：{stable_text}")
 
 
 async def translation_worker(
@@ -273,8 +309,6 @@ async def translation_worker(
         await translated_queue.put(None)
         return
 
-    # Async Client（异步客户端）等待网络时不会阻塞 Event Loop（事件循环）。
-    # Timeout（超时）设为 15 秒；关闭 SDK 自动重试，避免延迟无限增加。
     client = AsyncOpenAI(
         api_key=api_key,
         base_url=DEEPSEEK_BASE_URL,
@@ -288,7 +322,6 @@ async def translation_worker(
             chinese_text = await text_queue.get()
 
             if chinese_text is None:
-                # Sentinel（哨兵值）继续传给翻译结果下游。
                 await translated_queue.put(None)
                 print("Translation Worker 已结束")
                 break
@@ -296,7 +329,6 @@ async def translation_worker(
             request_started_at = time.perf_counter()
 
             try:
-                # Prompt（提示词）只包含当前稳定中文，不发送 ASR Partial。
                 response = await client.chat.completions.create(
                     model=DEEPSEEK_MODEL,
                     messages=[
@@ -326,15 +358,11 @@ async def translation_worker(
                 print(f"中文：{chinese_text}")
                 print(f"英文：{english_text}")
                 print(f"翻译耗时：{latency_ms:.0f} ms")
-
-                # translated_queue 中只放最终英文翻译。
-                # 有界 Queue 通过 Backpressure（背压）限制无限积压。
                 await translated_queue.put(english_text)
 
             except APITimeoutError:
                 print("[Translation Error] 请求超时，请继续说下一句")
             except RateLimitError:
-                # Rate Limit（速率限制）失败只影响当前句，不中断流水线。
                 print("[Translation Error] API 触发速率限制")
             except APIConnectionError:
                 print("[Translation Error] 无法连接 DeepSeek API")
@@ -344,7 +372,6 @@ async def translation_worker(
                     f"状态码：{error.status_code}"
                 )
             except Exception as error:
-                # 不打印请求头或 Key，只显示异常类型。
                 print(
                     "[Translation Error] 翻译失败："
                     f"{type(error).__name__}"
@@ -353,27 +380,11 @@ async def translation_worker(
         await client.close()
 
 
-async def translation_debug_worker(
-    translated_queue: asyncio.Queue,
-) -> None:
-    """验证最终英文已经进入 translated_queue。"""
-    while True:
-        english_text = await translated_queue.get()
-
-        if english_text is None:
-            print("Translation Debug Worker 已结束")
-            break
-
-        print(f"[Translated Queue] 收到英文：{english_text}")
-
-
 def speak_sync(english_text: str) -> None:
     """同步创建语音引擎并完整播放一句英文。"""
-    # 当前 Windows 环境复用同一个 Engine（语音引擎）时只播放第一句，
-    # 因此继续为每句英文创建全新的 Engine，优先保证可靠播放。
+    # Windows 环境继续为每句创建新 Engine，保证连续多句可靠播放。
     tts_engine = pyttsx3.init()
 
-    # 优先选择英文 Voice（音色），避免使用系统默认的中文音色。
     voices = tts_engine.getProperty("voices")
     english_voice = next(
         (voice for voice in voices if "english" in voice.name.lower()),
@@ -381,15 +392,11 @@ def speak_sync(english_text: str) -> None:
     )
     if english_voice is not None:
         tts_engine.setProperty("voice", english_voice.id)
+        
 
-    # TTS（文字转语音）：先加入待朗读文本，再执行同步播放。
     tts_engine.say(english_text)
-
-    # runAndWait() 是 Blocking（阻塞）操作，会等整句播放完成。
     tts_engine.runAndWait()
     tts_engine.stop()
-
-    # 删除引用，让本句 Engine 释放；下一句会创建全新的 Engine。
     del tts_engine
 
 
@@ -409,8 +416,6 @@ async def tts_worker(translated_queue: asyncio.Queue) -> None:
         playback_started_at = time.perf_counter()
 
         try:
-            # asyncio.to_thread（把同步阻塞操作放到工作线程）使播放不会
-            # 卡住 Event Loop。这里仍等待本句播完，不并行播放多句。
             await asyncio.to_thread(speak_sync, english_text)
         except Exception as error:
             print(f"[TTS Error] 播放失败：{type(error).__name__}")
@@ -422,9 +427,6 @@ async def tts_worker(translated_queue: asyncio.Queue) -> None:
         print("[TTS] 播放完成", flush=True)
         print(f"TTS 播放耗时：{playback_latency_ms:.0f} ms")
 
-        # V5 暂未实现 Echo Cancellation（回声消除）；建议戴耳机测试，
-        # 避免扬声器英文被持续工作的麦克风重新采集。
-
 
 async def main() -> None:
     if not MODEL_PATH.exists():
@@ -435,19 +437,15 @@ async def main() -> None:
         print("缺少 DEEPSEEK_API_KEY")
         return
 
-    # 关闭 Vosk 底层的详细日志，让终端专注显示识别结果。
     SetLogLevel(-1)
 
-    # 有界 Queue 限制最多积压 5 个音频块，防止内存无限增长。
     audio_queue = asyncio.Queue(maxsize=5)
     text_queue = asyncio.Queue(maxsize=5)
     translated_queue = asyncio.Queue(maxsize=5)
     stop_event = asyncio.Event()
     microphone_ready = asyncio.Event()
 
-    # V5 End-to-End（端到端）：麦克风 -> ASR -> 翻译 -> TTS。
-    # translated_queue 只能有一个 Consumer（消费者），否则多个 Worker
-    # 会分走不同句子；因此不再同时启动 translation_debug_worker。
+    # 完整端到端数据流；translated_queue 只由 TTS 消费。
     await asyncio.gather(
         audio_worker(audio_queue, stop_event, microphone_ready),
         asr_worker(audio_queue, text_queue),
