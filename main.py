@@ -24,10 +24,34 @@ CHANNELS = 1  # Channel（声道）：1 表示单声道
 CHUNK_DURATION_SECONDS = 0.2  # Chunk（音频块）：每块大约 200 ms
 VAD_RMS_THRESHOLD = 10.0  # RMS 高于此值时认为当前有人说话
 ENDPOINT_SILENCE_SECONDS = 0.6  # 连续静音达到此时长时认为一句话结束
+BENCHMARK_REPEATS = 3
+TEST_SENTENCES = [
+    "你好",
+    "今天天气怎么样",
+    "你叫什么名字",
+    "我今天想去深圳",
+    "我今天下午准备去深圳找朋友吃饭",
+    "明天早上八点提醒我去上课",
+    "广州",
+    "深圳",
+    "东莞",
+    "贵州",
+    "杭州",
+    "我最近正在学习 LangGraph",
+    "我用 DeepSeek 做翻译",
+    "今天想休息",
+    "今天想去西安",
+]
 MODEL_PATH = (
     Path(__file__).resolve().parent
     / "models"
     / "vosk-model-small-cn-0.22"
+)
+BENCHMARK_RESULTS_PATH = (
+    Path(__file__).resolve().parent / "asr_benchmark_results.jsonl"
+)
+NORMALIZATION_PUNCTUATION = set(
+    "，。！？；：、“”‘’,.!?;:\"'"
 )
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-v4-flash"
@@ -131,6 +155,8 @@ async def wait_for_stop(
 async def asr_worker(
     audio_queue: asyncio.Queue,
     text_queue: asyncio.Queue,
+    benchmark_mode: bool = False,
+    asr_ready: asyncio.Event | None = None,
 ) -> None:
     """持续消费真实音频，输出中文流式识别结果。"""
     # ASR（自动语音识别）模型在本机运行，不需要 API Key。
@@ -139,6 +165,18 @@ async def asr_worker(
     model = await asyncio.to_thread(Model, str(MODEL_PATH))
     recognizer = KaldiRecognizer(model, PREFERRED_SAMPLE_RATE)
     print("ASR 已就绪：Vosk 中文流式识别")
+    if asr_ready is not None:
+        asr_ready.set()
+
+    async def publish_stable_text(
+        stable_text: str,
+        endpoint_latency_ms: float | None,
+    ) -> None:
+        """正常模式输出文本；Benchmark 模式同时输出 Endpoint 延迟。"""
+        if benchmark_mode:
+            await text_queue.put((stable_text, endpoint_latency_ms))
+        else:
+            await text_queue.put(stable_text)
 
     last_partial = ""
     is_speaking = False
@@ -155,18 +193,24 @@ async def asr_worker(
             stable_text = remaining_result.get("text", "").strip()
 
             if stable_text and stable_text != last_committed_text:
+                committed_at = time.perf_counter()
+                endpoint_latency_ms = None
                 result_time = datetime.now().strftime("%H:%M:%S.%f")[:-3]
                 if speech_end_time is not None:
                     asr_final_wait_ms = (
-                        time.perf_counter() - speech_end_time
+                        committed_at - speech_end_time
                     ) * 1000
+                    endpoint_latency_ms = asr_final_wait_ms
                     print(
                         f"[ASR Final {result_time}] {stable_text} "
                         f"| ASR Final Wait: {asr_final_wait_ms:.0f} ms"
                     )
                 else:
                     print(f"[ASR Final {result_time}] {stable_text}")
-                await text_queue.put(stable_text)
+                await publish_stable_text(
+                    stable_text,
+                    endpoint_latency_ms,
+                )
                 last_committed_text = stable_text
 
             speech_end_time = None
@@ -224,10 +268,13 @@ async def asr_worker(
                         and endpoint_text != last_committed_text
                     ):
                         last_committed_text = endpoint_text
-                        await text_queue.put(endpoint_text)
                         endpoint_commit_latency_ms = (
                             time.perf_counter() - speech_end_time
                         ) * 1000
+                        await publish_stable_text(
+                            endpoint_text,
+                            endpoint_commit_latency_ms,
+                        )
                         result_time = datetime.now().strftime(
                             "%H:%M:%S.%f"
                         )[:-3]
@@ -264,10 +311,13 @@ async def asr_worker(
             last_partial = ""
 
             if stable_text and stable_text != last_committed_text:
+                committed_at = time.perf_counter()
+                endpoint_latency_ms = None
                 if speech_end_time is not None:
                     asr_final_wait_ms = (
-                        time.perf_counter() - speech_end_time
+                        committed_at - speech_end_time
                     ) * 1000
+                    endpoint_latency_ms = asr_final_wait_ms
                     print(
                         f"[ASR Final {result_time}] {stable_text} "
                         f"| 近似延迟: {latency_ms:.0f} ms "
@@ -278,7 +328,14 @@ async def asr_worker(
                         f"[ASR Final {result_time}] {stable_text} "
                         f"| 近似延迟: {latency_ms:.0f} ms"
                     )
-                await text_queue.put(stable_text)
+                    if last_voice_time is not None:
+                        endpoint_latency_ms = (
+                            committed_at - last_voice_time
+                        ) * 1000
+                await publish_stable_text(
+                    stable_text,
+                    endpoint_latency_ms,
+                )
                 last_committed_text = stable_text
 
             # 当前 Vosk Final 已处理，避免旧的句尾时间被下一句话复用。
@@ -456,12 +513,249 @@ async def tts_worker(translated_queue: asyncio.Queue) -> None:
         print(f"TTS Total Playback: {total_playback_ms:.0f} ms")
 
 
+def save_benchmark_result(result: dict) -> None:
+    """把一条 Benchmark 结果追加为 JSON Lines（每行一个 JSON 对象）。"""
+    with BENCHMARK_RESULTS_PATH.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(result, ensure_ascii=False) + "\n")
+
+
+def normalize_text(text: str) -> str:
+    """移除空白和常见标点，并把英文字母统一为小写。"""
+    return "".join(
+        character.lower()
+        for character in text
+        if not character.isspace()
+        and character not in NORMALIZATION_PUNCTUATION
+    )
+
+
+def levenshtein_distance(reference: str, hypothesis: str) -> int:
+    """按 Unicode 字符计算两个字符串之间的 Levenshtein 编辑距离。"""
+    previous_row = list(range(len(hypothesis) + 1))
+
+    for reference_index, reference_character in enumerate(reference, start=1):
+        current_row = [reference_index]
+
+        for hypothesis_index, hypothesis_character in enumerate(
+            hypothesis,
+            start=1,
+        ):
+            insertion_cost = current_row[hypothesis_index - 1] + 1
+            deletion_cost = previous_row[hypothesis_index] + 1
+            substitution_cost = (
+                previous_row[hypothesis_index - 1]
+                + (reference_character != hypothesis_character)
+            )
+            current_row.append(
+                min(
+                    insertion_cost,
+                    deletion_cost,
+                    substitution_cost,
+                )
+            )
+
+        previous_row = current_row
+
+    return previous_row[-1]
+
+
+async def benchmark_worker(
+    text_queue: asyncio.Queue,
+    stop_event: asyncio.Event,
+    microphone_ready: asyncio.Event,
+    asr_ready: asyncio.Event,
+) -> None:
+    """逐句提示用户朗读，记录 Vosk 的最终识别结果。"""
+    await microphone_ready.wait()
+    await asr_ready.wait()
+
+    total_planned = len(TEST_SENTENCES) * BENCHMARK_REPEATS
+    total_samples = 0
+    exact_match_count = 0
+    normalized_exact_match_count = 0
+    total_cer = 0.0
+    endpoint_latency_total = 0.0
+    endpoint_latency_count = 0
+    stopped_early = False
+
+    print("\n========== ASR Benchmark Mode ==========")
+    print(f"测试句数：{len(TEST_SENTENCES)}")
+    print(f"每句重复：{BENCHMARK_REPEATS} 次")
+    print(f"计划样本：{total_planned}")
+
+    for sentence_index, target_text in enumerate(TEST_SENTENCES, start=1):
+        for repeat_index in range(1, BENCHMARK_REPEATS + 1):
+            if stop_event.is_set():
+                stopped_early = True
+                break
+
+            sample_number = total_samples + 1
+            print("\n----------------------------------------")
+            print(
+                f"[句子 {sentence_index}/{len(TEST_SENTENCES)} | "
+                f"第 {repeat_index}/{BENCHMARK_REPEATS} 次 | "
+                f"样本 {sample_number}/{total_planned}]"
+            )
+            print("请朗读：")
+            print(f"“{target_text}”")
+
+            queue_item = await text_queue.get()
+            if queue_item is None:
+                stopped_early = True
+                break
+
+            recognized_text, endpoint_latency_ms = queue_item
+            exact_match = recognized_text == target_text
+            normalized_target = normalize_text(target_text)
+            normalized_recognized = normalize_text(recognized_text)
+            normalized_exact_match = (
+                normalized_target == normalized_recognized
+            )
+            edit_distance = levenshtein_distance(
+                normalized_target,
+                normalized_recognized,
+            )
+
+            # CER（字符错误率）通常用目标字符数作为分母。
+            # 空目标且识别也为空时记为 0；只有识别文本时安全记为 1。
+            if normalized_target:
+                cer = edit_distance / len(normalized_target)
+            else:
+                cer = 0.0 if not normalized_recognized else 1.0
+
+            total_samples += 1
+            if exact_match:
+                exact_match_count += 1
+            if normalized_exact_match:
+                normalized_exact_match_count += 1
+            total_cer += cer
+            if endpoint_latency_ms is not None:
+                endpoint_latency_total += endpoint_latency_ms
+                endpoint_latency_count += 1
+
+            result = {
+                "target": target_text,
+                "recognized": recognized_text,
+                "exact_match": exact_match,
+                "normalized_target": normalized_target,
+                "normalized_recognized": normalized_recognized,
+                "normalized_exact_match": normalized_exact_match,
+                "edit_distance": edit_distance,
+                "cer": cer,
+                "endpoint_latency_ms": (
+                    round(endpoint_latency_ms, 1)
+                    if endpoint_latency_ms is not None
+                    else None
+                ),
+                "timestamp": datetime.now().astimezone().isoformat(
+                    timespec="milliseconds"
+                ),
+            }
+            await asyncio.to_thread(save_benchmark_result, result)
+
+            print("目标：")
+            print(target_text)
+            print("识别：")
+            print(recognized_text)
+            print("标准化目标：")
+            print(normalized_target)
+            print("标准化识别：")
+            print(normalized_recognized)
+            print("Raw Exact Match:")
+            print("PASS" if exact_match else "FAIL")
+            print("Normalized Exact Match:")
+            print("PASS" if normalized_exact_match else "FAIL")
+            print("CER:")
+            print(f"{cer * 100:.2f}%")
+            if endpoint_latency_ms is not None:
+                print(f"Endpoint Latency: {endpoint_latency_ms:.0f} ms")
+            else:
+                print("Endpoint Latency: N/A")
+
+        if stopped_early:
+            break
+
+    completed_all = total_samples == total_planned
+    if completed_all:
+        # 完成固定测试集后停止麦克风，并继续消费到 Sentinel，
+        # 确保 ASR Worker 不会因 Queue（队列）背压而无法退出。
+        stop_event.set()
+        while await text_queue.get() is not None:
+            pass
+
+    exact_match_rate = (
+        exact_match_count / total_samples * 100
+        if total_samples
+        else 0.0
+    )
+    normalized_exact_match_rate = (
+        normalized_exact_match_count / total_samples * 100
+        if total_samples
+        else 0.0
+    )
+    average_cer = total_cer / total_samples if total_samples else 0.0
+    average_endpoint_latency = (
+        endpoint_latency_total / endpoint_latency_count
+        if endpoint_latency_count
+        else None
+    )
+
+    print("\n========== Benchmark Summary ==========")
+    print(f"Total Samples: {total_samples}")
+    print("\nRaw Exact Match:")
+    print(f"{exact_match_count} / {total_samples}")
+    print(f"{exact_match_rate:.1f}%")
+    print("\nNormalized Exact Match:")
+    print(f"{normalized_exact_match_count} / {total_samples}")
+    print(f"{normalized_exact_match_rate:.1f}%")
+    print("\nAverage CER:")
+    print(f"{average_cer * 100:.2f}%")
+    print("\nAverage Endpoint Latency:")
+    if average_endpoint_latency is not None:
+        print(f"{average_endpoint_latency:.0f} ms")
+    else:
+        print("N/A")
+    if total_samples:
+        print("\nResults saved to:")
+        print(BENCHMARK_RESULTS_PATH.name)
+    else:
+        print("尚未产生可保存的测试结果")
+    if stopped_early:
+        print("Benchmark 提前停止")
+    print("=======================================")
+
+    if completed_all:
+        print("Benchmark 已完成，请按 Enter 退出")
+
+
+def choose_run_mode() -> str | None:
+    """让用户选择正常翻译或独立 ASR Benchmark 模式。"""
+    print("请选择运行模式：")
+    print("1. Normal Mode（正常实时翻译模式）")
+    print("2. ASR Benchmark Mode（ASR 测试模式）")
+
+    while True:
+        try:
+            run_mode = input("请输入 1 或 2：").strip()
+        except EOFError:
+            print("没有收到模式选择，程序结束")
+            return None
+
+        if run_mode in {"1", "2"}:
+            return run_mode
+        print("输入无效，请输入 1 或 2")
+
+
 async def main() -> None:
+    run_mode = choose_run_mode()
+    if run_mode is None:
+        return
+
     if not MODEL_PATH.exists():
         print(f"找不到 Vosk 中文模型：{MODEL_PATH}")
         return
 
-    if not os.environ.get("DEEPSEEK_API_KEY"):
+    if run_mode == "1" and not os.environ.get("DEEPSEEK_API_KEY"):
         print("缺少 DEEPSEEK_API_KEY")
         return
 
@@ -469,18 +763,38 @@ async def main() -> None:
 
     audio_queue = asyncio.Queue(maxsize=5)
     text_queue = asyncio.Queue(maxsize=5)
-    translated_queue = asyncio.Queue(maxsize=5)
     stop_event = asyncio.Event()
     microphone_ready = asyncio.Event()
 
-    # 完整端到端数据流；translated_queue 只由 TTS 消费。
-    await asyncio.gather(
-        audio_worker(audio_queue, stop_event, microphone_ready),
-        asr_worker(audio_queue, text_queue),
-        translation_worker(text_queue, translated_queue),
-        tts_worker(translated_queue),
-        wait_for_stop(stop_event, microphone_ready),
-    )
+    if run_mode == "2":
+        asr_ready = asyncio.Event()
+        await asyncio.gather(
+            audio_worker(audio_queue, stop_event, microphone_ready),
+            asr_worker(
+                audio_queue,
+                text_queue,
+                benchmark_mode=True,
+                asr_ready=asr_ready,
+            ),
+            benchmark_worker(
+                text_queue,
+                stop_event,
+                microphone_ready,
+                asr_ready,
+            ),
+            wait_for_stop(stop_event, microphone_ready),
+        )
+    else:
+        translated_queue = asyncio.Queue(maxsize=5)
+
+        # Normal Mode 保留原来的完整端到端数据流。
+        await asyncio.gather(
+            audio_worker(audio_queue, stop_event, microphone_ready),
+            asr_worker(audio_queue, text_queue),
+            translation_worker(text_queue, translated_queue),
+            tts_worker(translated_queue),
+            wait_for_stop(stop_event, microphone_ready),
+        )
 
     print("所有任务正常退出")
 
