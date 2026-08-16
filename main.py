@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,9 @@ CHANNELS = 1  # Channel（声道）：1 表示单声道
 CHUNK_DURATION_SECONDS = 0.2  # Chunk（音频块）：每块大约 200 ms
 VAD_RMS_THRESHOLD = 10.0  # RMS 高于此值时认为当前有人说话
 ENDPOINT_SILENCE_SECONDS = 0.6  # 连续静音达到此时长时认为一句话结束
+ASR_PROVIDER = "sensevoice"  # Benchmark 可选："vosk" 或 "sensevoice"
+VOSK_MODEL_NAME = "vosk-model-small-cn-0.22"
+SENSEVOICE_MODEL_NAME = "iic/SenseVoiceSmall"
 BENCHMARK_REPEATS = 3
 TEST_SENTENCES = [
     "你好",
@@ -42,14 +46,30 @@ TEST_SENTENCES = [
     "今天想休息",
     "今天想去西安",
 ]
+HOTWORD_TEST_SENTENCES = [
+    "我用 DeepSeek 做翻译",
+    "我最近正在学习 LangGraph",
+    "我最近在学 Python",
+    "我用 Redis 做缓存",
+    "这个项目使用 WebSocket",
+    "我准备使用 Docker 部署项目",
+    "我使用 FastAPI 搭建后端",
+    "我通过 GitHub 管理代码",
+    "我正在使用 OpenAI 的模型",
+    "我正在使用 ChatGPT",
+]
+# 当前 SenseVoiceSmall 推理代码不读取 FunASR 的通用 hotword 参数。
+# 因此 ON 模式只加载并记录词表，不伪造模型已经应用 Hotword Biasing（热词偏置）。
+SENSEVOICE_HOTWORD_BIASING_SUPPORTED = False
 MODEL_PATH = (
     Path(__file__).resolve().parent
     / "models"
-    / "vosk-model-small-cn-0.22"
+    / VOSK_MODEL_NAME
 )
 BENCHMARK_RESULTS_PATH = (
     Path(__file__).resolve().parent / "asr_benchmark_results.jsonl"
 )
+HOTWORDS_PATH = Path(__file__).resolve().parent / "hotwords.json"
 NORMALIZATION_PUNCTUATION = set(
     "，。！？；：、“”‘’,.!?;:\"'"
 )
@@ -355,6 +375,165 @@ async def asr_worker(
                 last_partial = partial_text
 
 
+def load_sensevoice_model():
+    """延迟导入 FunASR，并在 CPU 上加载 SenseVoiceSmall。"""
+    # Lazy Import（延迟导入）确保 Normal Mode 不加载 FunASR/PyTorch。
+    from funasr import AutoModel
+
+    return AutoModel(
+        model=SENSEVOICE_MODEL_NAME,
+        device="cpu",
+        disable_update=True,
+        disable_pbar=True,
+    )
+
+
+def recognize_sensevoice_sync(model, utterance_audio: np.ndarray) -> str:
+    """对一整句 float32 音频执行 SenseVoiceSmall 离线推理。"""
+    results = model.generate(
+        input=utterance_audio,
+        language="zh",
+        use_itn=True,
+        batch_size_s=60,
+    )
+    if not results:
+        return ""
+
+    raw_text = results[0].get("text", "")
+    # SenseVoice 原始结果含 <|zh|>、<|Speech|> 等元数据标签。
+    # Benchmark 只比较 ASR 文本，所以在 ASR Provider 层移除这些标签。
+    return re.sub(r"<\|[^>]+\|>", "", raw_text).strip()
+
+
+async def sensevoice_asr_worker(
+    audio_queue: asyncio.Queue,
+    text_queue: asyncio.Queue,
+    asr_ready: asyncio.Event,
+) -> None:
+    """用现有 RMS VAD 收集整句音频，再交给 SenseVoiceSmall 推理。"""
+    print("ASR 正在加载 SenseVoiceSmall...")
+    try:
+        model = await asyncio.to_thread(load_sensevoice_model)
+    except Exception as error:
+        print(
+            "[SenseVoice Error] 模型加载失败："
+            f"{type(error).__name__}: {error}"
+        )
+        asr_ready.set()
+        await text_queue.put(None)
+
+        # 继续消费到 Sentinel，避免 audio_queue 满后阻塞停止流程。
+        while await audio_queue.get() is not None:
+            pass
+        print("SenseVoice ASR Worker 已结束")
+        return
+
+    print("ASR 已就绪：SenseVoiceSmall 整句离线识别（CPU）")
+    asr_ready.set()
+
+    is_speaking = False
+    last_voice_time = None
+    utterance_chunks = []
+
+    async def recognize_and_publish(
+        speech_end_time: float,
+        endpoint_latency_ms: float | None,
+    ) -> None:
+        utterance_audio = np.concatenate(utterance_chunks).astype(
+            np.float32,
+            copy=False,
+        )
+
+        inference_started_at = time.perf_counter()
+        try:
+            recognized_text = await asyncio.to_thread(
+                recognize_sensevoice_sync,
+                model,
+                utterance_audio,
+            )
+        except Exception as error:
+            print(
+                "[SenseVoice Error] 推理失败："
+                f"{type(error).__name__}: {error}"
+            )
+            recognized_text = ""
+        result_received_at = time.perf_counter()
+
+        asr_inference_latency_ms = (
+            result_received_at - inference_started_at
+        ) * 1000
+        speech_end_to_result_latency_ms = (
+            result_received_at - speech_end_time
+        ) * 1000
+        result_time = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+
+        print(
+            f"[ASR SenseVoice Final {result_time}] {recognized_text} "
+            f"| SenseVoice Inference Latency: "
+            f"{asr_inference_latency_ms:.0f} ms "
+            f"| Speech End To Result Latency: "
+            f"{speech_end_to_result_latency_ms:.0f} ms"
+        )
+        await text_queue.put(
+            (
+                recognized_text,
+                endpoint_latency_ms,
+                asr_inference_latency_ms,
+                speech_end_to_result_latency_ms,
+            )
+        )
+
+    while True:
+        queue_item = await audio_queue.get()
+
+        if queue_item is None:
+            if is_speaking and utterance_chunks:
+                speech_end_time = last_voice_time or time.perf_counter()
+                await recognize_and_publish(speech_end_time, None)
+
+            await text_queue.put(None)
+            print("SenseVoice ASR Worker 已结束")
+            break
+
+        audio_chunk, _chunk_created_at, chunk_clock_time = queue_item
+        rms = float(np.sqrt(np.mean(audio_chunk**2))) * 1000
+        print(
+            f"[Audio {chunk_clock_time}] Chunk: {audio_chunk.size} samples "
+            f"| RMS: {rms:.1f}"
+        )
+
+        vad_now = time.perf_counter()
+        if rms > VAD_RMS_THRESHOLD:
+            if not is_speaking:
+                utterance_chunks = []
+            is_speaking = True
+            last_voice_time = vad_now
+            utterance_chunks.append(audio_chunk)
+        elif is_speaking and last_voice_time is not None:
+            utterance_chunks.append(audio_chunk)
+            silence_seconds = vad_now - last_voice_time
+
+            if silence_seconds >= ENDPOINT_SILENCE_SECONDS:
+                speech_end_time = last_voice_time
+                endpoint_latency_ms = (
+                    vad_now - speech_end_time
+                ) * 1000
+                print(
+                    "[VAD] Speech End detected "
+                    f"| silence: {endpoint_latency_ms:.0f} ms"
+                )
+
+                await recognize_and_publish(
+                    speech_end_time,
+                    endpoint_latency_ms,
+                )
+
+                # 一句提交后清空缓存，等待下一句话重新进入 speaking。
+                is_speaking = False
+                last_voice_time = None
+                utterance_chunks = []
+
+
 async def translation_worker(
     text_queue: asyncio.Queue,
     translated_queue: asyncio.Queue,
@@ -519,6 +698,46 @@ def save_benchmark_result(result: dict) -> None:
         file.write(json.dumps(result, ensure_ascii=False) + "\n")
 
 
+def load_hotwords(path: Path) -> list[str]:
+    """读取并合并 hotwords.json 中各类别的 Hotword（热词）。"""
+    try:
+        with path.open("r", encoding="utf-8") as file:
+            categories = json.load(file)
+    except FileNotFoundError:
+        print(f"[Hotword] {path.name} not found")
+        return []
+    except json.JSONDecodeError as error:
+        print(
+            f"[Hotword] {path.name} JSON 格式错误："
+            f"第 {error.lineno} 行，第 {error.colno} 列"
+        )
+        return []
+    except OSError as error:
+        print(f"[Hotword] 无法读取 {path.name}：{error}")
+        return []
+
+    if not isinstance(categories, dict):
+        print(f"[Hotword] {path.name} 顶层必须是 JSON 对象")
+        return []
+
+    hotwords = []
+    seen_hotwords = set()
+    for category_name, category_words in categories.items():
+        if not isinstance(category_words, list):
+            print(f"[Hotword] 跳过非列表类别：{category_name}")
+            continue
+
+        for word in category_words:
+            if not isinstance(word, str) or not word.strip():
+                continue
+            clean_word = word.strip()
+            if clean_word not in seen_hotwords:
+                hotwords.append(clean_word)
+                seen_hotwords.add(clean_word)
+
+    return hotwords
+
+
 def normalize_text(text: str) -> str:
     """移除空白和常见标点，并把英文字母统一为小写。"""
     return "".join(
@@ -527,6 +746,15 @@ def normalize_text(text: str) -> str:
         if not character.isspace()
         and character not in NORMALIZATION_PUNCTUATION
     )
+
+
+def find_target_hotword(target_text: str, hotwords: list[str]) -> str | None:
+    """从外部词表中找到目标句包含的热词，不使用品牌专属修正规则。"""
+    normalized_target = normalize_text(target_text)
+    for hotword in hotwords:
+        if normalize_text(hotword) in normalized_target:
+            return hotword
+    return None
 
 
 def levenshtein_distance(reference: str, hypothesis: str) -> int:
@@ -564,26 +792,48 @@ async def benchmark_worker(
     stop_event: asyncio.Event,
     microphone_ready: asyncio.Event,
     asr_ready: asyncio.Event,
+    asr_provider: str,
+    asr_model: str,
+    test_sentences: list[str],
+    benchmark_type: str,
+    hotword_enabled: bool,
+    hotwords: list[str],
 ) -> None:
-    """逐句提示用户朗读，记录 Vosk 的最终识别结果。"""
+    """逐句提示用户朗读，记录所选 ASR Provider 的最终结果。"""
     await microphone_ready.wait()
     await asr_ready.wait()
+    provider_display_name = (
+        "Vosk" if asr_provider == "vosk" else "SenseVoiceSmall"
+    )
 
-    total_planned = len(TEST_SENTENCES) * BENCHMARK_REPEATS
+    total_planned = len(test_sentences) * BENCHMARK_REPEATS
     total_samples = 0
     exact_match_count = 0
     normalized_exact_match_count = 0
     total_cer = 0.0
     endpoint_latency_total = 0.0
     endpoint_latency_count = 0
+    inference_latency_total = 0.0
+    inference_latency_count = 0
+    speech_end_to_result_total = 0.0
+    speech_end_to_result_count = 0
+    hotword_hit_count = 0
+    hotword_sample_count = 0
     stopped_early = False
 
-    print("\n========== ASR Benchmark Mode ==========")
-    print(f"测试句数：{len(TEST_SENTENCES)}")
+    if benchmark_type == "english_hotword":
+        print("\n========== English Hotword Benchmark ==========")
+        print(f"Hotword Mode: {'ON' if hotword_enabled else 'OFF'}")
+        print(f"Hotword Count: {len(hotwords)}")
+    else:
+        print("\n========== ASR Benchmark Mode ==========")
+    print(f"ASR Provider: {provider_display_name}")
+    print(f"ASR Model: {asr_model}")
+    print(f"测试句数：{len(test_sentences)}")
     print(f"每句重复：{BENCHMARK_REPEATS} 次")
     print(f"计划样本：{total_planned}")
 
-    for sentence_index, target_text in enumerate(TEST_SENTENCES, start=1):
+    for sentence_index, target_text in enumerate(test_sentences, start=1):
         for repeat_index in range(1, BENCHMARK_REPEATS + 1):
             if stop_event.is_set():
                 stopped_early = True
@@ -592,7 +842,7 @@ async def benchmark_worker(
             sample_number = total_samples + 1
             print("\n----------------------------------------")
             print(
-                f"[句子 {sentence_index}/{len(TEST_SENTENCES)} | "
+                f"[句子 {sentence_index}/{len(test_sentences)} | "
                 f"第 {repeat_index}/{BENCHMARK_REPEATS} 次 | "
                 f"样本 {sample_number}/{total_planned}]"
             )
@@ -604,12 +854,31 @@ async def benchmark_worker(
                 stopped_early = True
                 break
 
-            recognized_text, endpoint_latency_ms = queue_item
+            recognized_text = queue_item[0]
+            endpoint_latency_ms = queue_item[1]
+            asr_inference_latency_ms = (
+                queue_item[2] if len(queue_item) > 2 else None
+            )
+            speech_end_to_result_latency_ms = (
+                queue_item[3]
+                if len(queue_item) > 3
+                else endpoint_latency_ms
+            )
             exact_match = recognized_text == target_text
             normalized_target = normalize_text(target_text)
             normalized_recognized = normalize_text(recognized_text)
             normalized_exact_match = (
                 normalized_target == normalized_recognized
+            )
+            target_hotword = (
+                find_target_hotword(target_text, hotwords)
+                if benchmark_type == "english_hotword"
+                else None
+            )
+            hotword_hit = (
+                normalize_text(target_hotword) in normalized_recognized
+                if target_hotword is not None
+                else None
             )
             edit_distance = levenshtein_distance(
                 normalized_target,
@@ -628,23 +897,52 @@ async def benchmark_worker(
                 exact_match_count += 1
             if normalized_exact_match:
                 normalized_exact_match_count += 1
+            if hotword_hit is not None:
+                hotword_sample_count += 1
+                if hotword_hit:
+                    hotword_hit_count += 1
             total_cer += cer
             if endpoint_latency_ms is not None:
                 endpoint_latency_total += endpoint_latency_ms
                 endpoint_latency_count += 1
+            if asr_inference_latency_ms is not None:
+                inference_latency_total += asr_inference_latency_ms
+                inference_latency_count += 1
+            if speech_end_to_result_latency_ms is not None:
+                speech_end_to_result_total += (
+                    speech_end_to_result_latency_ms
+                )
+                speech_end_to_result_count += 1
 
             result = {
+                "benchmark_type": benchmark_type,
+                "hotword_enabled": hotword_enabled,
+                "hotword_count": len(hotwords),
+                "asr_provider": asr_provider,
+                "asr_model": asr_model,
                 "target": target_text,
                 "recognized": recognized_text,
                 "exact_match": exact_match,
                 "normalized_target": normalized_target,
                 "normalized_recognized": normalized_recognized,
                 "normalized_exact_match": normalized_exact_match,
+                "target_hotword": target_hotword,
+                "hotword_hit": hotword_hit,
                 "edit_distance": edit_distance,
                 "cer": cer,
                 "endpoint_latency_ms": (
                     round(endpoint_latency_ms, 1)
                     if endpoint_latency_ms is not None
+                    else None
+                ),
+                "asr_inference_latency_ms": (
+                    round(asr_inference_latency_ms, 1)
+                    if asr_inference_latency_ms is not None
+                    else None
+                ),
+                "speech_end_to_result_latency_ms": (
+                    round(speech_end_to_result_latency_ms, 1)
+                    if speech_end_to_result_latency_ms is not None
                     else None
                 ),
                 "timestamp": datetime.now().astimezone().isoformat(
@@ -667,10 +965,23 @@ async def benchmark_worker(
             print("PASS" if normalized_exact_match else "FAIL")
             print("CER:")
             print(f"{cer * 100:.2f}%")
+            if target_hotword is not None:
+                print(f"Target Hotword: {target_hotword}")
+                print(f"Hotword Hit: {'PASS' if hotword_hit else 'FAIL'}")
             if endpoint_latency_ms is not None:
                 print(f"Endpoint Latency: {endpoint_latency_ms:.0f} ms")
             else:
                 print("Endpoint Latency: N/A")
+            if asr_inference_latency_ms is not None:
+                print(
+                    "ASR Inference Latency: "
+                    f"{asr_inference_latency_ms:.0f} ms"
+                )
+            if speech_end_to_result_latency_ms is not None:
+                print(
+                    "Speech End To Result Latency: "
+                    f"{speech_end_to_result_latency_ms:.0f} ms"
+                )
 
         if stopped_early:
             break
@@ -699,8 +1010,30 @@ async def benchmark_worker(
         if endpoint_latency_count
         else None
     )
+    average_inference_latency = (
+        inference_latency_total / inference_latency_count
+        if inference_latency_count
+        else None
+    )
+    average_speech_end_to_result_latency = (
+        speech_end_to_result_total / speech_end_to_result_count
+        if speech_end_to_result_count
+        else None
+    )
+    hotword_hit_rate = (
+        hotword_hit_count / hotword_sample_count * 100
+        if hotword_sample_count
+        else 0.0
+    )
 
-    print("\n========== Benchmark Summary ==========")
+    if benchmark_type == "english_hotword":
+        print("\n========== English Hotword Benchmark ==========")
+    else:
+        print("\n========== Benchmark Summary ==========")
+    print(f"ASR Provider: {provider_display_name}")
+    print(f"ASR Model: {asr_model}")
+    if benchmark_type == "english_hotword":
+        print(f"Hotword: {'ON' if hotword_enabled else 'OFF'}")
     print(f"Total Samples: {total_samples}")
     print("\nRaw Exact Match:")
     print(f"{exact_match_count} / {total_samples}")
@@ -710,9 +1043,24 @@ async def benchmark_worker(
     print(f"{normalized_exact_match_rate:.1f}%")
     print("\nAverage CER:")
     print(f"{average_cer * 100:.2f}%")
+    if benchmark_type == "english_hotword":
+        print("\nHotword Hit:")
+        print(f"{hotword_hit_count} / {hotword_sample_count}")
+        print("\nHotword Hit Rate:")
+        print(f"{hotword_hit_rate:.1f}%")
     print("\nAverage Endpoint Latency:")
     if average_endpoint_latency is not None:
         print(f"{average_endpoint_latency:.0f} ms")
+    else:
+        print("N/A")
+    print("\nAverage ASR Inference Latency:")
+    if average_inference_latency is not None:
+        print(f"{average_inference_latency:.0f} ms")
+    else:
+        print("N/A")
+    print("\nAverage Speech End To Result Latency:")
+    if average_speech_end_to_result_latency is not None:
+        print(f"{average_speech_end_to_result_latency:.0f} ms")
     else:
         print("N/A")
     if total_samples:
@@ -746,12 +1094,96 @@ def choose_run_mode() -> str | None:
         print("输入无效，请输入 1 或 2")
 
 
+def choose_benchmark_type() -> str | None:
+    """选择普通测试集或 English Hotword（英文热词）专项测试集。"""
+    print("\n请选择 Benchmark 类型：")
+    print("1. General Benchmark")
+    print("2. English Hotword Benchmark")
+
+    while True:
+        try:
+            choice = input("请输入 1 或 2：").strip()
+        except EOFError:
+            print("没有收到 Benchmark 类型，程序结束")
+            return None
+
+        if choice == "1":
+            return "general"
+        if choice == "2":
+            return "english_hotword"
+        print("输入无效，请输入 1 或 2")
+
+
+def choose_hotword_mode() -> bool | None:
+    """选择 Hotword OFF（关闭）或 ON（开启）测试标签。"""
+    print("\n请选择 Hotword 模式：")
+    print("1. Hotword OFF")
+    print("2. Hotword ON")
+
+    while True:
+        try:
+            choice = input("请输入 1 或 2：").strip()
+        except EOFError:
+            print("没有收到 Hotword 模式，程序结束")
+            return None
+
+        if choice == "1":
+            return False
+        if choice == "2":
+            return True
+        print("输入无效，请输入 1 或 2")
+
+
 async def main() -> None:
     run_mode = choose_run_mode()
     if run_mode is None:
         return
 
-    if not MODEL_PATH.exists():
+    benchmark_type = "general"
+    hotword_enabled = False
+    hotwords = []
+    test_sentences = TEST_SENTENCES
+
+    if run_mode == "2":
+        selected_benchmark_type = choose_benchmark_type()
+        if selected_benchmark_type is None:
+            return
+        benchmark_type = selected_benchmark_type
+
+        if benchmark_type == "english_hotword":
+            selected_hotword_mode = choose_hotword_mode()
+            if selected_hotword_mode is None:
+                return
+            hotword_enabled = selected_hotword_mode
+            hotwords = load_hotwords(HOTWORDS_PATH)
+            test_sentences = HOTWORD_TEST_SENTENCES
+            print(f"Hotword Mode: {'ON' if hotword_enabled else 'OFF'}")
+
+            if hotword_enabled:
+                print(f"[Hotword] 已加载 {len(hotwords)} 个热词")
+                if (
+                    ASR_PROVIDER == "sensevoice"
+                    and not SENSEVOICE_HOTWORD_BIASING_SUPPORTED
+                ):
+                    print(
+                        "[Hotword] 当前 SenseVoiceSmall 路径无法直接做真正 "
+                        "Hotword Biasing；不会向模型传入无效参数。"
+                    )
+                elif ASR_PROVIDER != "sensevoice":
+                    print(
+                        f"[Hotword] 当前 {ASR_PROVIDER} Benchmark 未接入"
+                        "真正 Hotword Biasing。"
+                    )
+
+    if (
+        run_mode == "2"
+        and ASR_PROVIDER not in {"vosk", "sensevoice"}
+    ):
+        print('ASR_PROVIDER 只支持 "vosk" 或 "sensevoice"')
+        return
+
+    uses_vosk = run_mode == "1" or ASR_PROVIDER == "vosk"
+    if uses_vosk and not MODEL_PATH.exists():
         print(f"找不到 Vosk 中文模型：{MODEL_PATH}")
         return
 
@@ -768,19 +1200,37 @@ async def main() -> None:
 
     if run_mode == "2":
         asr_ready = asyncio.Event()
-        await asyncio.gather(
-            audio_worker(audio_queue, stop_event, microphone_ready),
-            asr_worker(
+
+        if ASR_PROVIDER == "vosk":
+            benchmark_asr_worker = asr_worker(
                 audio_queue,
                 text_queue,
                 benchmark_mode=True,
                 asr_ready=asr_ready,
-            ),
+            )
+            benchmark_model_name = VOSK_MODEL_NAME
+        else:
+            benchmark_asr_worker = sensevoice_asr_worker(
+                audio_queue,
+                text_queue,
+                asr_ready,
+            )
+            benchmark_model_name = SENSEVOICE_MODEL_NAME
+
+        await asyncio.gather(
+            audio_worker(audio_queue, stop_event, microphone_ready),
+            benchmark_asr_worker,
             benchmark_worker(
                 text_queue,
                 stop_event,
                 microphone_ready,
                 asr_ready,
+                ASR_PROVIDER,
+                benchmark_model_name,
+                test_sentences,
+                benchmark_type,
+                hotword_enabled,
+                hotwords,
             ),
             wait_for_stop(stop_event, microphone_ready),
         )
