@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -202,3 +203,26 @@ def correct_hotwords(
     ]
     return corrected_text, corrections
 
+
+async def hotword_correction_worker(
+    raw_text_queue: asyncio.Queue,
+    corrected_text_queue: asyncio.Queue,
+    hotwords: list[str],
+) -> None:
+    """只在 Normal Mode 中消费原始字符串，并输出热词纠错后的字符串。"""
+    while True:
+        raw_text = await raw_text_queue.get()
+
+        if raw_text is None:
+            # Sentinel（哨兵值）继续传给 Translation Worker。
+            await corrected_text_queue.put(None)
+            print("Hotword Correction Worker 已结束")
+            break
+
+        corrected_text, corrections = correct_hotwords(raw_text, hotwords)
+        if corrections:
+            print("\n[Hotword Correction]")
+            print(f"Raw: {raw_text}")
+            print(f"Corrected: {corrected_text}")
+
+        await corrected_text_queue.put(corrected_text)

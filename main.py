@@ -12,11 +12,13 @@ from config import (
     HOTWORDS_PATH,
     HOTWORD_TEST_SENTENCES,
     MODEL_PATH,
+    NORMAL_ASR_PROVIDER,
+    NORMAL_HOTWORD_CORRECTION_ENABLED,
     SENSEVOICE_MODEL_NAME,
     TEST_SENTENCES,
     VOSK_MODEL_NAME,
 )
-from hotwords import load_hotwords
+from hotwords import hotword_correction_worker, load_hotwords
 from translation import translation_worker
 from tts import tts_worker
 
@@ -121,7 +123,18 @@ async def main() -> None:
         print('ASR_PROVIDER 只支持 "vosk" 或 "sensevoice"')
         return
 
-    uses_vosk = run_mode == "1" or ASR_PROVIDER == "vosk"
+    if (
+        run_mode == "1"
+        and NORMAL_ASR_PROVIDER not in {"vosk", "sensevoice"}
+    ):
+        print('NORMAL_ASR_PROVIDER 只支持 "vosk" 或 "sensevoice"')
+        return
+
+    uses_vosk = (
+        run_mode == "1" and NORMAL_ASR_PROVIDER == "vosk"
+    ) or (
+        run_mode == "2" and ASR_PROVIDER == "vosk"
+    )
     if uses_vosk and not MODEL_PATH.exists():
         print(f"找不到 Vosk 中文模型：{MODEL_PATH}")
         return
@@ -153,6 +166,7 @@ async def main() -> None:
                 audio_queue,
                 text_queue,
                 asr_ready,
+                benchmark_mode=True,
             )
             benchmark_model_name = SENSEVOICE_MODEL_NAME
 
@@ -176,14 +190,63 @@ async def main() -> None:
     else:
         translated_queue = asyncio.Queue(maxsize=5)
 
-        # Normal Mode 保留原来的完整端到端数据流。
-        await asyncio.gather(
-            audio_worker(audio_queue, stop_event, microphone_ready),
-            vosk_asr_worker(audio_queue, text_queue),
-            translation_worker(text_queue, translated_queue),
-            tts_worker(translated_queue),
-            wait_for_stop(stop_event, microphone_ready),
-        )
+        if NORMAL_ASR_PROVIDER == "vosk":
+            print("Normal ASR: Vosk")
+
+            # Vosk Normal Mode 保留原来的完整端到端数据流。
+            await asyncio.gather(
+                audio_worker(audio_queue, stop_event, microphone_ready),
+                vosk_asr_worker(audio_queue, text_queue),
+                translation_worker(text_queue, translated_queue),
+                tts_worker(translated_queue),
+                wait_for_stop(stop_event, microphone_ready),
+            )
+        else:
+            print("Normal ASR: SenseVoiceSmall")
+            print(
+                "Hotword Post Correction: "
+                f"{'ON' if NORMAL_HOTWORD_CORRECTION_ENABLED else 'OFF'}"
+            )
+            normal_asr_ready = asyncio.Event()
+            raw_text_queue = text_queue
+
+            if NORMAL_HOTWORD_CORRECTION_ENABLED:
+                corrected_text_queue = asyncio.Queue(maxsize=5)
+                normal_hotwords = load_hotwords(HOTWORDS_PATH)
+
+                await asyncio.gather(
+                    audio_worker(audio_queue, stop_event, microphone_ready),
+                    sensevoice_asr_worker(
+                        audio_queue,
+                        raw_text_queue,
+                        normal_asr_ready,
+                        benchmark_mode=False,
+                    ),
+                    hotword_correction_worker(
+                        raw_text_queue,
+                        corrected_text_queue,
+                        normal_hotwords,
+                    ),
+                    translation_worker(
+                        corrected_text_queue,
+                        translated_queue,
+                    ),
+                    tts_worker(translated_queue),
+                    wait_for_stop(stop_event, microphone_ready),
+                )
+            else:
+                await asyncio.gather(
+                    audio_worker(audio_queue, stop_event, microphone_ready),
+                    sensevoice_asr_worker(
+                        audio_queue,
+                        raw_text_queue,
+                        normal_asr_ready,
+                        benchmark_mode=False,
+                    ),
+                    translation_worker(raw_text_queue, translated_queue),
+                    tts_worker(translated_queue),
+                    wait_for_stop(stop_event, microphone_ready),
+                )
 
     print("所有任务正常退出")
 

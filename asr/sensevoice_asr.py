@@ -46,6 +46,7 @@ async def sensevoice_asr_worker(
     audio_queue: asyncio.Queue,
     text_queue: asyncio.Queue,
     asr_ready: asyncio.Event,
+    benchmark_mode: bool = False,
 ) -> None:
     """用现有 RMS VAD 收集整句音频，再交给 SenseVoiceSmall 推理。"""
     print("ASR 正在加载 SenseVoiceSmall...")
@@ -111,14 +112,18 @@ async def sensevoice_asr_worker(
             f"| Speech End To Result Latency: "
             f"{speech_end_to_result_latency_ms:.0f} ms"
         )
-        await text_queue.put(
-            (
-                recognized_text,
-                endpoint_latency_ms,
-                asr_inference_latency_ms,
-                speech_end_to_result_latency_ms,
+        if benchmark_mode:
+            await text_queue.put(
+                (
+                    recognized_text,
+                    endpoint_latency_ms,
+                    asr_inference_latency_ms,
+                    speech_end_to_result_latency_ms,
+                )
             )
-        )
+        else:
+            # Normal Mode 下游 Translation Worker 只接收字符串。
+            await text_queue.put(recognized_text)
 
     while True:
         queue_item = await audio_queue.get()
@@ -169,4 +174,3 @@ async def sensevoice_asr_worker(
                 is_speaking = False
                 last_voice_time = None
                 utterance_chunks = []
-
