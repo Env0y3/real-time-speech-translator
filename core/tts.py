@@ -3,7 +3,7 @@ import time
 
 import pyttsx3
 
-from performance_logger import PerformanceLogger
+from core.performance_logger import PerformanceLogger
 
 
 def speak_sync(english_text: str) -> float | None:

@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+
 from elevenlabs.client import ElevenLabs
 from elevenlabs.play import play
 
@@ -13,8 +15,9 @@ audio = client.text_to_speech.convert(
     output_format="mp3_44100_128",
 )
 
-with open("elevenlabs_test.mp3", "wb") as f:
+output_path = Path(__file__).resolve().parent / "elevenlabs_test.mp3"
+with output_path.open("wb") as f:
     for chunk in audio:
         f.write(chunk)
 
-print("生成成功：elevenlabs_test.mp3")
+print(f"生成成功：{output_path}")

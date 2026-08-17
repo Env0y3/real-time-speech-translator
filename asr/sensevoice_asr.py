@@ -124,6 +124,7 @@ async def sensevoice_asr_worker(
     text_queue: asyncio.Queue,
     asr_ready: asyncio.Event,
     benchmark_mode: bool = False,
+    trace_session_id: str | None = None,
 ) -> None:
     """用现有 RMS VAD 收集整句音频，再交给 SenseVoiceSmall 推理。"""
     print("ASR 正在加载 SenseVoiceSmall...")
@@ -158,6 +159,8 @@ async def sensevoice_asr_worker(
     resumed_after_recent_endpoint = False
     time_since_last_endpoint = None
     endpoint_evaluation_logged = False
+    speech_started_at = None
+    normal_sentence_id = 0
     adaptive_endpoint_enabled = (
         ENDPOINT_ADAPTIVE_ENABLED and not benchmark_mode
     )
@@ -182,9 +185,12 @@ async def sensevoice_asr_worker(
         )
 
     async def recognize_and_publish(
-        speech_end_time: float,
+        last_voice_at: float,
+        endpoint_triggered_at: float,
+        current_speech_started_at: float | None,
         endpoint_latency_ms: float | None,
     ) -> None:
+        nonlocal normal_sentence_id
         utterance_audio = np.concatenate(utterance_chunks).astype(
             np.float32,
             copy=False,
@@ -209,7 +215,10 @@ async def sensevoice_asr_worker(
             result_received_at - inference_started_at
         ) * 1000
         speech_end_to_result_latency_ms = (
-            result_received_at - speech_end_time
+            result_received_at - last_voice_at
+        ) * 1000
+        endpoint_to_result_latency_ms = (
+            result_received_at - endpoint_triggered_at
         ) * 1000
         result_time = datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
@@ -218,7 +227,9 @@ async def sensevoice_asr_worker(
             f"| SenseVoice Inference Latency: "
             f"{asr_inference_latency_ms:.0f} ms "
             f"| Speech End To Result Latency: "
-            f"{speech_end_to_result_latency_ms:.0f} ms"
+            f"{speech_end_to_result_latency_ms:.0f} ms "
+            f"| Endpoint Trigger To Result: "
+            f"{endpoint_to_result_latency_ms:.0f} ms"
         )
         if benchmark_mode:
             await text_queue.put(
@@ -230,16 +241,49 @@ async def sensevoice_asr_worker(
                 )
             )
         else:
-            # Normal Mode 下游 Translation Worker 只接收字符串。
-            await text_queue.put(recognized_text)
+            normal_sentence_id += 1
+            trace_id = (
+                f"{trace_session_id}-{normal_sentence_id}"
+                if trace_session_id
+                else f"normal-{normal_sentence_id}"
+            )
+            # Normal Mode 从 Endpoint 开始携带轻量 Trace Metadata；
+            # Benchmark 继续保持上面的历史四元组结构。
+            await text_queue.put(
+                {
+                    "trace_id": trace_id,
+                    "sentence_id": normal_sentence_id,
+                    "raw_text": recognized_text,
+                    "text": recognized_text,
+                    "speech_started_at": current_speech_started_at,
+                    "last_voice_at": last_voice_at,
+                    "endpoint_triggered_at": endpoint_triggered_at,
+                    "speech_end_detected_at": endpoint_triggered_at,
+                    "endpoint_wait_ms": (
+                        endpoint_triggered_at - last_voice_at
+                    ) * 1000,
+                    "asr_started_at": inference_started_at,
+                    "asr_result_at": result_received_at,
+                    "hotword_done_at": None,
+                }
+            )
+            print(
+                f"[Trace] {trace_id} | Sentence ID: "
+                f"{normal_sentence_id}"
+            )
 
     while True:
         queue_item = await audio_queue.get()
 
         if queue_item is None:
             if is_speaking and utterance_chunks:
-                speech_end_time = last_voice_time or time.perf_counter()
-                await recognize_and_publish(speech_end_time, None)
+                last_voice_at = last_voice_time or time.perf_counter()
+                await recognize_and_publish(
+                    last_voice_at,
+                    time.perf_counter(),
+                    speech_started_at,
+                    None,
+                )
 
             await text_queue.put(None)
             print("SenseVoice ASR Worker 已结束")
@@ -259,6 +303,7 @@ async def sensevoice_asr_worker(
             if not is_speaking:
                 utterance_chunks = []
                 silence_started_at = None
+                speech_started_at = vad_now
                 voiced_duration_seconds = 0.0
                 voiced_chunk_count = 0
                 endpoint_evaluation_logged = False
@@ -388,9 +433,9 @@ async def sensevoice_asr_worker(
                 endpoint_evaluation_logged = True
 
             if silence_seconds >= effective_endpoint_threshold:
-                speech_end_time = last_voice_time
+                last_voice_at = last_voice_time
                 endpoint_latency_ms = (
-                    vad_now - speech_end_time
+                    vad_now - last_voice_at
                 ) * 1000
                 endpoint_reason = (
                     "short_utterance_confirmed"
@@ -412,7 +457,9 @@ async def sensevoice_asr_worker(
                 last_endpoint_time = vad_now
 
                 await recognize_and_publish(
-                    speech_end_time,
+                    last_voice_at,
+                    vad_now,
+                    speech_started_at,
                     endpoint_latency_ms,
                 )
 
@@ -426,3 +473,4 @@ async def sensevoice_asr_worker(
                 resumed_after_recent_endpoint = False
                 time_since_last_endpoint = None
                 endpoint_evaluation_logged = False
+                speech_started_at = None

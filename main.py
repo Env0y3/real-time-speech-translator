@@ -5,8 +5,8 @@ from vosk import SetLogLevel
 
 from asr.sensevoice_asr import sensevoice_asr_worker
 from asr.vosk_asr import vosk_asr_worker
-from audio import audio_worker, wait_for_stop
-from benchmark import benchmark_worker
+from core.audio import audio_worker, wait_for_stop
+from scripts.benchmark import benchmark_worker
 from config import (
     ASR_PROVIDER,
     ELEVENLABS_AUDIO_QUEUE_MAXSIZE,
@@ -28,11 +28,11 @@ from config import (
     TTS_PROVIDER,
     VOSK_MODEL_NAME,
 )
-from elevenlabs_tts import elevenlabs_tts_worker
-from hotwords import hotword_correction_worker, load_hotwords
-from performance_logger import PerformanceLogger, create_session_id
-from translation import streaming_translation_worker, translation_worker
-from tts import tts_worker
+from core.elevenlabs_tts import elevenlabs_tts_worker
+from core.hotwords import hotword_correction_worker, load_hotwords
+from core.performance_logger import PerformanceLogger, create_session_id
+from core.translation import streaming_translation_worker, translation_worker
+from core.tts import tts_worker
 
 
 def choose_run_mode() -> str | None:
@@ -302,6 +302,7 @@ async def main() -> None:
                         raw_text_queue,
                         normal_asr_ready,
                         benchmark_mode=False,
+                        trace_session_id=session_id,
                     ),
                     hotword_correction_worker(
                         raw_text_queue,
@@ -327,6 +328,7 @@ async def main() -> None:
                         raw_text_queue,
                         normal_asr_ready,
                         benchmark_mode=False,
+                        trace_session_id=session_id,
                     ),
                     selected_translation_worker(
                         raw_text_queue,

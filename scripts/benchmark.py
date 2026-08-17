@@ -3,8 +3,8 @@ import json
 from datetime import datetime
 
 from config import BENCHMARK_REPEATS, BENCHMARK_RESULTS_PATH
-from hotwords import correct_hotwords, find_target_hotword
-from text_utils import levenshtein_distance, normalize_text
+from core.hotwords import correct_hotwords, find_target_hotword
+from core.text_utils import levenshtein_distance, normalize_text
 
 
 def save_benchmark_result(result: dict) -> None:
@@ -433,4 +433,3 @@ async def benchmark_worker(
 
     if completed_all:
         print("Benchmark 已完成，请按 Enter 退出")
-

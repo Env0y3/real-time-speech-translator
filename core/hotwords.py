@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+import time
 from pathlib import Path
 
 from config import (
@@ -8,7 +9,7 @@ from config import (
     HOTWORD_MARGIN_THRESHOLD,
     HOTWORD_MAX_PHRASE_TOKENS,
 )
-from text_utils import levenshtein_distance, normalize_text
+from core.text_utils import levenshtein_distance, normalize_text
 
 
 def load_hotwords(path: Path) -> list[str]:
@@ -209,15 +210,21 @@ async def hotword_correction_worker(
     corrected_text_queue: asyncio.Queue,
     hotwords: list[str],
 ) -> None:
-    """只在 Normal Mode 中消费原始字符串，并输出热词纠错后的字符串。"""
+    """Normal Mode 只修改文本，并原样保留 ASR Trace Metadata。"""
     while True:
-        raw_text = await raw_text_queue.get()
+        raw_item = await raw_text_queue.get()
 
-        if raw_text is None:
+        if raw_item is None:
             # Sentinel（哨兵值）继续传给 Translation Worker。
             await corrected_text_queue.put(None)
             print("Hotword Correction Worker 已结束")
             break
+
+        if isinstance(raw_item, dict):
+            raw_text = raw_item.get("text", "")
+        else:
+            # 保留对旧字符串输入的兼容。
+            raw_text = raw_item
 
         corrected_text, corrections = correct_hotwords(raw_text, hotwords)
         if corrections:
@@ -225,4 +232,13 @@ async def hotword_correction_worker(
             print(f"Raw: {raw_text}")
             print(f"Corrected: {corrected_text}")
 
-        await corrected_text_queue.put(corrected_text)
+        if isinstance(raw_item, dict):
+            await corrected_text_queue.put(
+                {
+                    **raw_item,
+                    "text": corrected_text,
+                    "hotword_done_at": time.perf_counter(),
+                }
+            )
+        else:
+            await corrected_text_queue.put(corrected_text)

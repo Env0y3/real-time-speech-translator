@@ -20,8 +20,8 @@ from config import (
     ELEVENLABS_SAMPLE_RATE,
     ELEVENLABS_VOICE_ID,
 )
-from performance_logger import PerformanceLogger
-from tts import speak_sync, tts_worker
+from core.performance_logger import PerformanceLogger
+from core.tts import speak_sync, tts_worker
 
 
 TTS_SESSION_TIMEOUT_SECONDS = 60
@@ -60,6 +60,7 @@ class SentenceState:
     pipeline_finished: bool = False
     partial_failure: bool = False
     fallback_provider: str | None = None
+    trace: dict = field(default_factory=dict)
 
     @property
     def full_text(self) -> str:
@@ -133,6 +134,7 @@ def _write_audio_chunk(
 
 def _record_segment(state: SentenceState, item: dict) -> None:
     state.segments.setdefault(item["segment_index"], item["text"])
+    state.trace.update(item.get("trace", {}))
 
 
 async def _initialize_connection(websocket, api_key: str) -> None:
@@ -165,6 +167,7 @@ async def _send_segment(
     sent_at = time.perf_counter()
     if state.metrics.first_text_sent_at is None:
         state.metrics.first_text_sent_at = sent_at
+        state.trace["tts_first_text_sent_at"] = sent_at
 
     print(f"\n[Text Segment {item['segment_index']}]")
     print(text)
@@ -197,6 +200,7 @@ async def _send_sentence_segments(
             if current_item["sentence_id"] != state.sentence_id:
                 raise ElevenLabsTTSError("sentence_end 的 sentence_id 不匹配")
             # EOS（流结束信号）发出后仍继续接收，直到服务端 is_final。
+            state.trace.update(current_item.get("trace", {}))
             state.sentence_end_received = True
             await websocket.send(json.dumps({"text": ""}))
             return
@@ -241,6 +245,9 @@ async def _receive_audio_chunks(
                     is_first_chunk = metrics.first_audio_chunk_at is None
                     if is_first_chunk:
                         metrics.first_audio_chunk_at = received_at
+                        state.trace["tts_first_audio_received_at"] = (
+                            received_at
+                        )
                         network_first_audio_ms = (
                             received_at - metrics.first_segment_ready_at
                         ) * 1000
@@ -255,6 +262,7 @@ async def _receive_audio_chunks(
                         {
                             "type": "audio",
                             "session_id": runtime_session_id,
+                            "trace_id": state.trace.get("trace_id"),
                             "sentence_id": state.sentence_id,
                             "audio_chunk": audio_chunk,
                             "audio_received_at": received_at,
@@ -264,6 +272,9 @@ async def _receive_audio_chunks(
 
             if response.get("is_final") or response.get("isFinal"):
                 metrics.session_finished_at = time.perf_counter()
+                state.trace["tts_session_finished_at"] = (
+                    metrics.session_finished_at
+                )
                 received_final = True
                 break
     except ConnectionClosed as error:
@@ -285,10 +296,22 @@ async def _global_playback_worker(
 ) -> None:
     """Normal Mode 生命周期内唯一的播放 Consumer 和 OutputStream 用户。"""
     previous_sentence_finished_at = None
+    session_log_tasks = []
 
     while True:
         message = await audio_playback_queue.get()
         if message is None:
+            if session_log_tasks:
+                log_results = await asyncio.gather(
+                    *session_log_tasks,
+                    return_exceptions=True,
+                )
+                for log_result in log_results:
+                    if isinstance(log_result, Exception):
+                        print(
+                            "[Trace Log Warning] "
+                            f"{type(log_result).__name__}"
+                        )
             return
         sentence_id = message["sentence_id"]
         state = sentence_states.get(sentence_id)
@@ -299,6 +322,17 @@ async def _global_playback_worker(
             )
             continue
         metrics = state.metrics
+        message_trace_id = message.get("trace_id")
+        state_trace_id = state.trace.get("trace_id")
+        if (
+            message_trace_id is not None
+            and state_trace_id is not None
+            and message_trace_id != state_trace_id
+        ):
+            print(
+                "[Trace Warning] Playback trace_id 不匹配："
+                f"{message_trace_id} != {state_trace_id}"
+            )
 
         if message["type"] == "audio":
             if metrics.playback_error:
@@ -333,6 +367,7 @@ async def _global_playback_worker(
             if metrics.first_playback_at is None:
                 # write() 开始时间是软件层近似值，不冒充硬件首帧时间。
                 metrics.first_playback_at = write_started_at
+                state.trace["first_playback_at"] = write_started_at
                 metrics.tts_queue_wait_ms = (
                     write_started_at - message["audio_received_at"]
                 ) * 1000
@@ -364,6 +399,9 @@ async def _global_playback_worker(
                 metrics.first_playback_at = (
                     first_audio_started_at or fallback_started_at
                 )
+                state.trace["first_playback_at"] = (
+                    metrics.first_playback_at
+                )
             except Exception as error:
                 state.fallback_provider = "pyttsx3_failed"
                 metrics.playback_error = True
@@ -373,19 +411,34 @@ async def _global_playback_worker(
                     f"{type(error).__name__}"
                 )
             metrics.playback_finished_at = time.perf_counter()
+            state.trace["playback_finished_at"] = (
+                metrics.playback_finished_at
+            )
             previous_sentence_finished_at = metrics.playback_finished_at
-            await _print_and_log_session(performance_logger, state)
+            # 日志放到后台，不能阻塞下一句从全局播放队列开始写入。
+            session_log_tasks.append(
+                asyncio.create_task(
+                    _print_and_log_session(performance_logger, state)
+                )
+            )
             sentence_states.pop(sentence_id, None)
 
         elif message["type"] == "sentence_end":
             metrics.playback_finished_at = (
                 metrics.last_audio_write_finished_at or time.perf_counter()
             )
+            state.trace["playback_finished_at"] = (
+                metrics.playback_finished_at
+            )
             if metrics.first_playback_at is not None:
                 previous_sentence_finished_at = metrics.playback_finished_at
             if metrics.playback_error:
                 state.partial_failure = True
-            await _print_and_log_session(performance_logger, state)
+            session_log_tasks.append(
+                asyncio.create_task(
+                    _print_and_log_session(performance_logger, state)
+                )
+            )
             sentence_states.pop(sentence_id, None)
 
 
@@ -433,6 +486,7 @@ async def _run_sentence_session(
                 {
                     "type": "sentence_end",
                     "session_id": runtime_session_id,
+                    "trace_id": state.trace.get("trace_id"),
                     "sentence_id": state.sentence_id,
                 }
             )
@@ -463,8 +517,23 @@ async def _drain_failed_sentence(
         if item.get("event") == "segment":
             _record_segment(state, item)
         elif item.get("event") == "sentence_end":
+            state.trace.update(item.get("trace", {}))
             state.sentence_end_received = True
             return
+
+
+def _elapsed_ms(start_at, end_at) -> float | None:
+    """只用 perf_counter 同源时间点计算延迟；缺失值返回 None。"""
+    if not isinstance(start_at, (int, float)) or not isinstance(
+        end_at,
+        (int, float),
+    ):
+        return None
+    return (end_at - start_at) * 1000
+
+
+def _format_metric(value: float | None) -> str:
+    return f"{value:.0f} ms" if value is not None else "N/A"
 
 
 async def _print_and_log_session(
@@ -500,6 +569,54 @@ async def _print_and_log_session(
             metrics.playback_finished_at - metrics.first_playback_at
         ) * 1000
 
+    trace = state.trace
+    endpoint_triggered_at = trace.get("endpoint_triggered_at")
+    last_voice_at = trace.get("last_voice_at")
+    asr_result_at = trace.get("asr_result_at")
+    translation_first_token_at = trace.get("translation_first_token_at")
+    translation_first_segment_at = trace.get(
+        "translation_first_segment_at"
+    )
+    first_audio_received_at = trace.get("tts_first_audio_received_at")
+    first_playback_at = trace.get("first_playback_at")
+
+    speech_end_to_asr_result_ms = _elapsed_ms(
+        endpoint_triggered_at,
+        asr_result_at,
+    )
+    speech_end_to_translation_first_token_ms = _elapsed_ms(
+        endpoint_triggered_at,
+        translation_first_token_at,
+    )
+    speech_end_to_translation_first_segment_ms = _elapsed_ms(
+        endpoint_triggered_at,
+        translation_first_segment_at,
+    )
+    speech_end_to_tts_first_audio_ms = _elapsed_ms(
+        endpoint_triggered_at,
+        first_audio_received_at,
+    )
+    speech_end_to_first_playback_ms = _elapsed_ms(
+        endpoint_triggered_at,
+        first_playback_at,
+    )
+    last_voice_to_first_playback_ms = _elapsed_ms(
+        last_voice_at,
+        first_playback_at,
+    )
+    endpoint_wait_ms = _elapsed_ms(
+        last_voice_at,
+        endpoint_triggered_at,
+    )
+    translation_after_asr_ms = _elapsed_ms(
+        asr_result_at,
+        translation_first_segment_at,
+    )
+    tts_after_first_segment_ms = _elapsed_ms(
+        translation_first_segment_at,
+        first_audio_received_at,
+    )
+
     print(f"Audio Chunk Count: {metrics.audio_chunk_count}")
     print(f"Total Audio Bytes: {metrics.total_audio_bytes}")
     print(
@@ -524,6 +641,46 @@ async def _print_and_log_session(
         else "Cross-Sentence Gap: N/A"
     )
 
+    print("\n========== Trace Summary ==========")
+    print(f"Trace ID: {trace.get('trace_id', 'N/A')}")
+    print(f"Sentence ID: {state.sentence_id}")
+    print(
+        "Speech End → ASR Result: "
+        f"{_format_metric(speech_end_to_asr_result_ms)}"
+    )
+    print(
+        "Speech End → First Translation Segment: "
+        f"{_format_metric(speech_end_to_translation_first_segment_ms)}"
+    )
+    print(
+        "Speech End → First TTS Audio: "
+        f"{_format_metric(speech_end_to_tts_first_audio_ms)}"
+    )
+    print(
+        "Speech End → First English Playback: "
+        f"{_format_metric(speech_end_to_first_playback_ms)}"
+    )
+    print(
+        "Last Voice → First English Playback: "
+        f"{_format_metric(last_voice_to_first_playback_ms)}"
+    )
+    print("Breakdown:")
+    print(f"Endpoint Wait: {_format_metric(endpoint_wait_ms)}")
+    print(f"ASR: {_format_metric(speech_end_to_asr_result_ms)}")
+    print(
+        "Translation after ASR: "
+        f"{_format_metric(translation_after_asr_ms)}"
+    )
+    print(
+        "ElevenLabs after First Segment: "
+        f"{_format_metric(tts_after_first_segment_ms)}"
+    )
+    print(
+        "Playback Queue: "
+        f"{_format_metric(metrics.tts_queue_wait_ms)}"
+    )
+    print("===================================")
+
     if performance_logger is None:
         return
 
@@ -531,6 +688,7 @@ async def _print_and_log_session(
         {
             "event": "tts_session",
             "tts_provider": "elevenlabs",
+            "trace_id": trace.get("trace_id"),
             "fallback_provider": state.fallback_provider,
             "sentence_id": state.sentence_id,
             "segment_count": len(state.segments),
@@ -545,6 +703,77 @@ async def _print_and_log_session(
             "audio_chunk_count": metrics.audio_chunk_count,
             "total_audio_bytes": metrics.total_audio_bytes,
             "partial_failure": state.partial_failure,
+        }
+    )
+    await performance_logger.log(
+        {
+            "event": "trace_summary",
+            "trace_id": trace.get("trace_id"),
+            "sentence_id": state.sentence_id,
+            "raw_text": trace.get("raw_text"),
+            "source_text": trace.get("source_text"),
+            "translated_text": trace.get("translated_text"),
+            "speech_started_at": trace.get("speech_started_at"),
+            "last_voice_at": last_voice_at,
+            "endpoint_triggered_at": endpoint_triggered_at,
+            "asr_started_at": trace.get("asr_started_at"),
+            "asr_result_at": asr_result_at,
+            "hotword_done_at": trace.get("hotword_done_at"),
+            "translation_request_started_at": trace.get(
+                "translation_request_started_at"
+            ),
+            "translation_first_token_at": translation_first_token_at,
+            "translation_first_segment_at": (
+                translation_first_segment_at
+            ),
+            "translation_finished_at": trace.get(
+                "translation_finished_at"
+            ),
+            "tts_first_text_sent_at": trace.get(
+                "tts_first_text_sent_at"
+            ),
+            "tts_first_audio_received_at": first_audio_received_at,
+            "first_playback_at": first_playback_at,
+            "tts_session_finished_at": trace.get(
+                "tts_session_finished_at"
+            ),
+            "playback_finished_at": trace.get("playback_finished_at"),
+            "endpoint_wait_ms": endpoint_wait_ms,
+            "speech_end_to_asr_result_ms": (
+                speech_end_to_asr_result_ms
+            ),
+            "speech_end_to_translation_first_token_ms": (
+                speech_end_to_translation_first_token_ms
+            ),
+            "speech_end_to_translation_first_segment_ms": (
+                speech_end_to_translation_first_segment_ms
+            ),
+            "speech_end_to_tts_first_audio_ms": (
+                speech_end_to_tts_first_audio_ms
+            ),
+            "speech_end_to_first_playback_ms": (
+                speech_end_to_first_playback_ms
+            ),
+            "endpoint_trigger_to_first_playback_ms": (
+                speech_end_to_first_playback_ms
+            ),
+            "last_voice_to_first_playback_ms": (
+                last_voice_to_first_playback_ms
+            ),
+            "asr_stage_ms": speech_end_to_asr_result_ms,
+            "translation_after_asr_ms": translation_after_asr_ms,
+            "tts_after_first_segment_ms": tts_after_first_segment_ms,
+            "playback_queue_ms": metrics.tts_queue_wait_ms,
+            "translation_ttft_ms": _elapsed_ms(
+                trace.get("translation_request_started_at"),
+                translation_first_token_at,
+            ),
+            "translation_ttfs_ms": _elapsed_ms(
+                trace.get("translation_request_started_at"),
+                translation_first_segment_at,
+            ),
+            "network_first_audio_ms": network_first_audio_ms,
+            "tts_queue_wait_ms": metrics.tts_queue_wait_ms,
         }
     )
 
@@ -630,6 +859,7 @@ async def elevenlabs_tts_worker(
             _record_segment(state, first_item)
             print("\n[ElevenLabs TTS]")
             print(f"Sentence ID: {sentence_id}")
+            print(f"Trace ID: {state.trace.get('trace_id', 'N/A')}")
 
             try:
                 async with asyncio.timeout(TTS_SESSION_TIMEOUT_SECONDS):
@@ -661,6 +891,7 @@ async def elevenlabs_tts_worker(
                         {
                             "type": "pyttsx3_fallback",
                             "session_id": runtime_session_id,
+                            "trace_id": state.trace.get("trace_id"),
                             "sentence_id": sentence_id,
                             "text": state.full_text,
                         }
@@ -675,6 +906,7 @@ async def elevenlabs_tts_worker(
                         {
                             "type": "sentence_end",
                             "session_id": runtime_session_id,
+                            "trace_id": state.trace.get("trace_id"),
                             "sentence_id": sentence_id,
                         }
                     )

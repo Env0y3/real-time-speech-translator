@@ -20,7 +20,7 @@ from config import (
     STREAMING_TRANSLATION_TARGET_CHARS,
     TRANSLATION_SYSTEM_PROMPT,
 )
-from performance_logger import PerformanceLogger
+from core.performance_logger import PerformanceLogger
 
 
 TRANSLATION_BOUNDARY_PUNCTUATION = ",.!?;:"
@@ -31,6 +31,7 @@ def _translation_segment_message(
     segment_ready_at: float,
     sentence_id: int,
     segment_index: int,
+    trace_metadata: dict,
 ) -> dict:
     """构造 Translation → TTS 的语块消息。"""
     return {
@@ -40,6 +41,7 @@ def _translation_segment_message(
         "text": text,
         "segment_ready_at": segment_ready_at,
         "is_final_segment": False,
+        "trace": dict(trace_metadata),
     }
 
 
@@ -48,6 +50,7 @@ async def _publish_sentence_end(
     sentence_id: int,
     full_translation: str,
     segment_count: int,
+    trace_metadata: dict,
 ) -> None:
     """通知 TTS：当前中文句子的所有英文语块已经产生完毕。"""
     await translated_queue.put(
@@ -56,7 +59,48 @@ async def _publish_sentence_end(
             "sentence_id": sentence_id,
             "full_translation": full_translation,
             "segment_count": segment_count,
+            "trace": dict(trace_metadata),
         }
+    )
+
+
+def _prepare_translation_input(
+    queue_item,
+    sentence_counter: int,
+    performance_logger: PerformanceLogger | None,
+) -> tuple[str, int, int, dict]:
+    """兼容旧字符串输入，并让 ASR 生成的 sentence_id 成为权威编号。"""
+    if isinstance(queue_item, dict):
+        trace_metadata = dict(queue_item)
+        chinese_text = str(trace_metadata.get("text", ""))
+        sentence_id = int(
+            trace_metadata.get("sentence_id", sentence_counter + 1)
+        )
+    else:
+        chinese_text = str(queue_item)
+        sentence_id = sentence_counter + 1
+        trace_metadata = {
+            "sentence_id": sentence_id,
+            "raw_text": chinese_text,
+            "text": chinese_text,
+        }
+
+    session_id = (
+        performance_logger.session_id
+        if performance_logger is not None
+        else "translation"
+    )
+    trace_metadata.setdefault(
+        "trace_id",
+        f"{session_id}-{sentence_id}",
+    )
+    trace_metadata["sentence_id"] = sentence_id
+    trace_metadata["source_text"] = chinese_text
+    return (
+        chinese_text,
+        sentence_id,
+        max(sentence_counter, sentence_id),
+        trace_metadata,
     )
 
 
@@ -183,19 +227,31 @@ async def translation_worker(
         max_retries=0,
     )
     print(f"Translation 已就绪：DeepSeek {DEEPSEEK_MODEL}")
-    sentence_id = 0
+    sentence_counter = 0
 
     try:
         while True:
-            chinese_text = await text_queue.get()
+            queue_item = await text_queue.get()
 
-            if chinese_text is None:
+            if queue_item is None:
                 await translated_queue.put(None)
                 print("Translation Worker 已结束")
                 break
 
-            sentence_id += 1
+            (
+                chinese_text,
+                sentence_id,
+                sentence_counter,
+                trace_metadata,
+            ) = _prepare_translation_input(
+                queue_item,
+                sentence_counter,
+                performance_logger,
+            )
             request_started_at = time.perf_counter()
+            trace_metadata["translation_request_started_at"] = (
+                request_started_at
+            )
 
             try:
                 english_text = await request_full_translation(
@@ -211,6 +267,16 @@ async def translation_worker(
                     print("[Translation Error] 模型返回了空文本")
                     continue
 
+                trace_metadata.update(
+                    {
+                        "translation_first_segment_at": (
+                            translation_finished_at
+                        ),
+                        "translation_finished_at": translation_finished_at,
+                        "translated_text": english_text,
+                    }
+                )
+
                 print("\n[Translation]")
                 print(f"中文：{chinese_text}")
                 print(f"英文：{english_text}")
@@ -221,6 +287,7 @@ async def translation_worker(
                         translation_finished_at,
                         sentence_id,
                         1,
+                        trace_metadata,
                     )
                 )
                 await _publish_sentence_end(
@@ -228,6 +295,7 @@ async def translation_worker(
                     sentence_id,
                     english_text,
                     1,
+                    trace_metadata,
                 )
                 await _log_translation_result(
                     performance_logger,
@@ -239,6 +307,7 @@ async def translation_worker(
                     latency_ms,
                     1,
                     False,
+                    trace_metadata,
                 )
 
             except APITimeoutError:
@@ -317,6 +386,7 @@ async def _log_translation_result(
     translation_total_ms: float,
     segment_count: int,
     streaming_enabled: bool,
+    trace_metadata: dict,
 ) -> None:
     """保存一句翻译的结构化延迟数据；缺失指标使用 JSON null。"""
     if performance_logger is None:
@@ -324,6 +394,7 @@ async def _log_translation_result(
     await performance_logger.log(
         {
             "event": "translation",
+            "trace_id": trace_metadata.get("trace_id"),
             "sentence_id": sentence_id,
             "source_text": source_text,
             "full_translation": full_translation,
@@ -344,6 +415,7 @@ async def _fallback_to_full_translation(
     first_token_at: float | None,
     sentence_id: int,
     performance_logger: PerformanceLogger | None,
+    trace_metadata: dict,
 ) -> None:
     """流式请求在首段输出前失败时，回退到原来的完整翻译。"""
     print("[Streaming Translation] 回退到完整翻译")
@@ -361,6 +433,13 @@ async def _fallback_to_full_translation(
         return
 
     segment_ready_at = time.perf_counter()
+    trace_metadata.update(
+        {
+            "translation_first_segment_at": segment_ready_at,
+            "translation_finished_at": segment_ready_at,
+            "translated_text": english_text,
+        }
+    )
     print("\n[Translation Segment 1]")
     print(english_text)
     print("\n[Full Streaming Translation]")
@@ -371,6 +450,7 @@ async def _fallback_to_full_translation(
             segment_ready_at,
             sentence_id,
             1,
+            trace_metadata,
         )
     )
     await _publish_sentence_end(
@@ -378,6 +458,7 @@ async def _fallback_to_full_translation(
         sentence_id,
         english_text,
         1,
+        trace_metadata,
     )
     ttft_ms, ttfs_ms, total_latency_ms = _print_streaming_metrics(
         request_started_at,
@@ -396,6 +477,7 @@ async def _fallback_to_full_translation(
         total_latency_ms,
         1,
         True,
+        trace_metadata,
     )
 
 
@@ -418,19 +500,31 @@ async def streaming_translation_worker(
         max_retries=0,
     )
     print(f"Streaming Translation 已就绪：DeepSeek {DEEPSEEK_MODEL}")
-    sentence_id = 0
+    sentence_counter = 0
 
     try:
         while True:
-            chinese_text = await text_queue.get()
+            queue_item = await text_queue.get()
 
-            if chinese_text is None:
+            if queue_item is None:
                 await translated_queue.put(None)
                 print("Streaming Translation Worker 已结束")
                 break
 
-            sentence_id += 1
+            (
+                chinese_text,
+                sentence_id,
+                sentence_counter,
+                trace_metadata,
+            ) = _prepare_translation_input(
+                queue_item,
+                sentence_counter,
+                performance_logger,
+            )
             request_started_at = time.perf_counter()
+            trace_metadata["translation_request_started_at"] = (
+                request_started_at
+            )
             print("\n[Streaming Translation Request]")
             print(f"中文：{chinese_text}")
             print(f"Translation Request Start: {time.strftime('%H:%M:%S')}")
@@ -447,6 +541,9 @@ async def streaming_translation_worker(
                 segment_ready_at = time.perf_counter()
                 if first_segment_at is None:
                     first_segment_at = segment_ready_at
+                    trace_metadata["translation_first_segment_at"] = (
+                        segment_ready_at
+                    )
                 segment_count += 1
                 print(f"\n[Translation Segment {segment_count}]")
                 print(segment)
@@ -458,6 +555,7 @@ async def streaming_translation_worker(
                         segment_ready_at,
                         sentence_id,
                         segment_count,
+                        trace_metadata,
                     )
                 )
 
@@ -487,6 +585,9 @@ async def streaming_translation_worker(
 
                     if first_token_at is None and delta_content.strip():
                         first_token_at = time.perf_counter()
+                        trace_metadata["translation_first_token_at"] = (
+                            first_token_at
+                        )
 
                     # OpenAI Compatible流返回的是delta.content增量，只追加一次。
                     full_translation_parts.append(delta_content)
@@ -531,6 +632,7 @@ async def streaming_translation_worker(
                         first_token_at,
                         sentence_id,
                         performance_logger,
+                        trace_metadata,
                     )
                     continue
 
@@ -544,6 +646,12 @@ async def streaming_translation_worker(
                 print("\n[Partial Streaming Translation]")
                 print(full_translation)
                 translation_finished_at = time.perf_counter()
+                trace_metadata.update(
+                    {
+                        "translation_finished_at": translation_finished_at,
+                        "translated_text": full_translation,
+                    }
+                )
                 ttft_ms, ttfs_ms, total_latency_ms = (
                     _print_streaming_metrics(
                         request_started_at,
@@ -563,12 +671,14 @@ async def streaming_translation_worker(
                     total_latency_ms,
                     segment_count,
                     True,
+                    trace_metadata,
                 )
                 await _publish_sentence_end(
                     translated_queue,
                     sentence_id,
                     full_translation,
                     segment_count,
+                    trace_metadata,
                 )
                 continue
 
@@ -582,6 +692,7 @@ async def streaming_translation_worker(
                     first_token_at,
                     sentence_id,
                     performance_logger,
+                    trace_metadata,
                 )
                 continue
 
@@ -595,6 +706,12 @@ async def streaming_translation_worker(
             print("\n[Full Streaming Translation]")
             print(full_translation)
             translation_finished_at = time.perf_counter()
+            trace_metadata.update(
+                {
+                    "translation_finished_at": translation_finished_at,
+                    "translated_text": full_translation,
+                }
+            )
             ttft_ms, ttfs_ms, total_latency_ms = _print_streaming_metrics(
                 request_started_at,
                 first_token_at,
@@ -612,12 +729,14 @@ async def streaming_translation_worker(
                 total_latency_ms,
                 segment_count,
                 True,
+                trace_metadata,
             )
             await _publish_sentence_end(
                 translated_queue,
                 sentence_id,
                 full_translation,
                 segment_count,
+                trace_metadata,
             )
     finally:
         await client.close()
