@@ -57,6 +57,66 @@ def _default_output_index() -> int:
     return output_index
 
 
+def _default_input_index() -> int:
+    try:
+        input_index = int(sd.default.device[0])
+    except (IndexError, TypeError, ValueError) as error:
+        raise AudioRoutingError(
+            "System default input device is unavailable."
+        ) from error
+    if input_index < 0:
+        raise AudioRoutingError(
+            "System default input device is unavailable."
+        )
+    return input_index
+
+
+def resolve_input_device(
+    device: int | str | None,
+    role: str = "Input microphone",
+) -> tuple[AudioDeviceInfo, bool]:
+    """把输入设备选择解析为 PortAudio 设备，并验证输入声道。"""
+    devices = list_audio_devices()
+    uses_default = device is None
+    if device is None:
+        device_index = _default_input_index()
+    elif isinstance(device, bool):
+        raise AudioRoutingError(f"{role} device must be an index or name.")
+    elif isinstance(device, int):
+        device_index = device
+    elif isinstance(device, str) and device.strip():
+        query = device.strip().casefold()
+        exact_matches = [
+            item for item in devices if item.name.casefold() == query
+        ]
+        partial_matches = [
+            item for item in devices if query in item.name.casefold()
+        ]
+        matches = exact_matches or partial_matches
+        if len(matches) != 1:
+            match_indexes = ", ".join(str(item.index) for item in matches)
+            detail = f"; matching indexes: {match_indexes}" if matches else ""
+            raise AudioRoutingError(
+                f'{role} device name "{device}" is not unique or was not '
+                f"found{detail}."
+            )
+        device_index = matches[0].index
+    else:
+        raise AudioRoutingError(f"{role} device must be an index or name.")
+
+    if device_index < 0 or device_index >= len(devices):
+        raise AudioRoutingError(
+            f"{role} device {device_index} does not exist."
+        )
+    device_info = devices[device_index]
+    if device_info.max_input_channels <= 0:
+        raise AudioRoutingError(
+            f"{role} device [{device_info.index}] {device_info.name} "
+            "has no input channels."
+        )
+    return device_info, uses_default
+
+
 def resolve_audio_device(
     device: int | str | None,
     role: str,

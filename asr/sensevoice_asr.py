@@ -125,6 +125,7 @@ async def sensevoice_asr_worker(
     asr_ready: asyncio.Event,
     benchmark_mode: bool = False,
     trace_session_id: str | None = None,
+    event_callback=None,
 ) -> None:
     """用现有 RMS VAD 收集整句音频，再交给 SenseVoiceSmall 推理。"""
     print("ASR 正在加载 SenseVoiceSmall...")
@@ -135,6 +136,22 @@ async def sensevoice_asr_worker(
             "[SenseVoice Error] 模型加载失败："
             f"{type(error).__name__}: {error}"
         )
+        if event_callback is not None:
+            try:
+                event_callback(
+                    {
+                        "type": "error",
+                        "message": (
+                            "SenseVoice model failed to load: "
+                            f"{type(error).__name__}"
+                        ),
+                    }
+                )
+            except Exception as callback_error:
+                print(
+                    "[Event Callback Warning] "
+                    f"{type(callback_error).__name__}"
+                )
         asr_ready.set()
         await text_queue.put(None)
 
@@ -146,6 +163,14 @@ async def sensevoice_asr_worker(
 
     print("ASR 已就绪：SenseVoiceSmall 整句离线识别（CPU）")
     asr_ready.set()
+    if event_callback is not None:
+        try:
+            event_callback({"type": "status", "status": "Listening"})
+        except Exception as callback_error:
+            print(
+                "[Event Callback Warning] "
+                f"{type(callback_error).__name__}"
+            )
 
     is_speaking = False
     last_voice_time = None
@@ -199,6 +224,16 @@ async def sensevoice_asr_worker(
         )
 
         inference_started_at = time.perf_counter()
+        if event_callback is not None:
+            try:
+                event_callback(
+                    {"type": "status", "status": "Recognizing"}
+                )
+            except Exception as callback_error:
+                print(
+                    "[Event Callback Warning] "
+                    f"{type(callback_error).__name__}"
+                )
         try:
             recognized_text = await asyncio.to_thread(
                 recognize_sensevoice_sync,
@@ -210,6 +245,22 @@ async def sensevoice_asr_worker(
                 "[SenseVoice Error] 推理失败："
                 f"{type(error).__name__}: {error}"
             )
+            if event_callback is not None:
+                try:
+                    event_callback(
+                        {
+                            "type": "error",
+                            "message": (
+                                "SenseVoice recognition failed: "
+                                f"{type(error).__name__}"
+                            ),
+                        }
+                    )
+                except Exception as callback_error:
+                    print(
+                        "[Event Callback Warning] "
+                        f"{type(callback_error).__name__}"
+                    )
             recognized_text = ""
         result_received_at = time.perf_counter()
 

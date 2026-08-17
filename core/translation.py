@@ -26,6 +26,14 @@ from core.performance_logger import PerformanceLogger
 TRANSLATION_BOUNDARY_PUNCTUATION = ",.!?;:"
 
 
+def _emit_pipeline_event(
+    performance_logger: PerformanceLogger | None,
+    event: dict,
+) -> None:
+    if performance_logger is not None:
+        performance_logger.emit_event(event)
+
+
 def has_translation_output(text: str) -> bool:
     """空字符串或纯空白翻译不能产生任何 TTS Queue 消息。"""
     return bool(text.strip())
@@ -222,6 +230,10 @@ async def translation_worker(
     api_key = os.environ.get("DEEPSEEK_API_KEY")
     if not api_key:
         print("缺少 DEEPSEEK_API_KEY")
+        _emit_pipeline_event(
+            performance_logger,
+            {"type": "error", "message": "Missing DEEPSEEK_API_KEY"},
+        )
         await translated_queue.put(None)
         return
 
@@ -252,6 +264,19 @@ async def translation_worker(
                 queue_item,
                 sentence_counter,
                 performance_logger,
+            )
+            _emit_pipeline_event(
+                performance_logger,
+                {
+                    "type": "asr_result",
+                    "sentence_id": sentence_id,
+                    "text": chinese_text,
+                    "trace_id": trace_metadata.get("trace_id"),
+                },
+            )
+            _emit_pipeline_event(
+                performance_logger,
+                {"type": "status", "status": "Translating"},
             )
             request_started_at = time.perf_counter()
             trace_metadata["translation_request_started_at"] = (
@@ -295,6 +320,15 @@ async def translation_worker(
                         trace_metadata,
                     )
                 )
+                _emit_pipeline_event(
+                    performance_logger,
+                    {
+                        "type": "translation_segment",
+                        "sentence_id": sentence_id,
+                        "segment_index": 1,
+                        "text": english_text,
+                    },
+                )
                 await _publish_sentence_end(
                     translated_queue,
                     sentence_id,
@@ -317,19 +351,45 @@ async def translation_worker(
 
             except APITimeoutError:
                 print("[Translation Error] 请求超时，请继续说下一句")
+                _emit_pipeline_event(
+                    performance_logger,
+                    {"type": "error", "message": "DeepSeek request timed out"},
+                )
             except RateLimitError:
                 print("[Translation Error] API 触发速率限制")
+                _emit_pipeline_event(
+                    performance_logger,
+                    {"type": "error", "message": "DeepSeek rate limit reached"},
+                )
             except APIConnectionError:
                 print("[Translation Error] 无法连接 DeepSeek API")
+                _emit_pipeline_event(
+                    performance_logger,
+                    {"type": "error", "message": "DeepSeek connection error"},
+                )
             except APIStatusError as error:
                 print(
                     "[Translation Error] API 请求失败，"
                     f"状态码：{error.status_code}"
                 )
+                _emit_pipeline_event(
+                    performance_logger,
+                    {
+                        "type": "error",
+                        "message": f"DeepSeek API error ({error.status_code})",
+                    },
+                )
             except Exception as error:
                 print(
                     "[Translation Error] 翻译失败："
                     f"{type(error).__name__}"
+                )
+                _emit_pipeline_event(
+                    performance_logger,
+                    {
+                        "type": "error",
+                        "message": f"Translation failed: {type(error).__name__}",
+                    },
                 )
     finally:
         await client.close()
@@ -431,6 +491,13 @@ async def _fallback_to_full_translation(
             "[Translation Fallback Error] "
             f"{_describe_translation_error(error)}"
         )
+        _emit_pipeline_event(
+            performance_logger,
+            {
+                "type": "error",
+                "message": f"DeepSeek fallback failed: {_describe_translation_error(error)}",
+            },
+        )
         return
 
     if not has_translation_output(english_text):
@@ -457,6 +524,15 @@ async def _fallback_to_full_translation(
             1,
             trace_metadata,
         )
+    )
+    _emit_pipeline_event(
+        performance_logger,
+        {
+            "type": "translation_segment",
+            "sentence_id": sentence_id,
+            "segment_index": 1,
+            "text": english_text,
+        },
     )
     await _publish_sentence_end(
         translated_queue,
@@ -495,6 +571,10 @@ async def streaming_translation_worker(
     api_key = os.environ.get("DEEPSEEK_API_KEY")
     if not api_key:
         print("缺少 DEEPSEEK_API_KEY")
+        _emit_pipeline_event(
+            performance_logger,
+            {"type": "error", "message": "Missing DEEPSEEK_API_KEY"},
+        )
         await translated_queue.put(None)
         return
 
@@ -525,6 +605,19 @@ async def streaming_translation_worker(
                 queue_item,
                 sentence_counter,
                 performance_logger,
+            )
+            _emit_pipeline_event(
+                performance_logger,
+                {
+                    "type": "asr_result",
+                    "sentence_id": sentence_id,
+                    "text": chinese_text,
+                    "trace_id": trace_metadata.get("trace_id"),
+                },
+            )
+            _emit_pipeline_event(
+                performance_logger,
+                {"type": "status", "status": "Translating"},
             )
             request_started_at = time.perf_counter()
             trace_metadata["translation_request_started_at"] = (
@@ -562,6 +655,15 @@ async def streaming_translation_worker(
                         segment_count,
                         trace_metadata,
                     )
+                )
+                _emit_pipeline_event(
+                    performance_logger,
+                    {
+                        "type": "translation_segment",
+                        "sentence_id": sentence_id,
+                        "segment_index": segment_count,
+                        "text": segment,
+                    },
                 )
 
             stream = None
@@ -627,6 +729,16 @@ async def streaming_translation_worker(
                 print(
                     "[Streaming Translation Error] "
                     f"{_describe_translation_error(stream_error)}"
+                )
+                _emit_pipeline_event(
+                    performance_logger,
+                    {
+                        "type": "error",
+                        "message": (
+                            "DeepSeek stream error: "
+                            f"{_describe_translation_error(stream_error)}"
+                        ),
+                    },
                 )
                 if segment_count == 0:
                     await _fallback_to_full_translation(

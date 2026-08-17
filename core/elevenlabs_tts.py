@@ -493,6 +493,15 @@ async def _global_playback_worker(
                     "TTS Queue Wait: "
                     f"{metrics.tts_queue_wait_ms:.0f} ms"
                 )
+                if performance_logger is not None:
+                    performance_logger.emit_event(
+                        {
+                            "type": "tts_started",
+                            "status": "Speaking",
+                            "sentence_id": sentence_id,
+                            "trace_id": state.trace.get("trace_id"),
+                        }
+                    )
 
         elif message["type"] == "pyttsx3_fallback":
             state.fallback_provider = "pyttsx3"
@@ -884,6 +893,13 @@ async def _print_and_log_session(
             ),
             "network_first_audio_ms": network_first_audio_ms,
             "tts_queue_wait_ms": metrics.tts_queue_wait_ms,
+        }
+    )
+    performance_logger.emit_event(
+        {
+            "type": "status",
+            "status": "Listening",
+            "sentence_id": state.sentence_id,
         }
     )
 

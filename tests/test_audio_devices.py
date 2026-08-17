@@ -6,6 +6,7 @@ from core.audio_devices import (
     build_audio_routing_plan,
     list_audio_devices,
     resolve_audio_device,
+    resolve_input_device,
     validate_output_device,
 )
 
@@ -64,6 +65,18 @@ class AudioDeviceTests(unittest.TestCase):
         )
         self.assertEqual(by_index.index, 2)
         self.assertEqual(by_name.index, 2)
+
+    def test_input_device_selection_reuses_shared_device_list(self) -> None:
+        input_device, uses_default = resolve_input_device(0)
+        self.assertEqual(input_device.index, 0)
+        self.assertFalse(uses_default)
+
+    def test_output_only_device_is_rejected_as_input(self) -> None:
+        with self.assertRaisesRegex(
+            AudioRoutingError,
+            "has no input channels",
+        ):
+            resolve_input_device(2)
 
     def test_invalid_device_id_is_rejected(self) -> None:
         with self.assertRaisesRegex(AudioRoutingError, "does not exist"):

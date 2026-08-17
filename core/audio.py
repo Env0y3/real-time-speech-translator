@@ -9,20 +9,24 @@ from config import (
     CHUNK_DURATION_SECONDS,
     PREFERRED_SAMPLE_RATE,
 )
+from core.audio_devices import AudioRoutingError, resolve_input_device
 
 
 async def audio_worker(
     audio_queue: asyncio.Queue,
     stop_event: asyncio.Event,
     microphone_ready: asyncio.Event,
+    input_device: int | str | None = None,
 ) -> None:
     """持续读取真实麦克风，并把音频块放入异步队列。"""
-    device_info = sd.query_devices(kind="input")
+    selected_device, uses_default = resolve_input_device(input_device)
+    device_info = sd.query_devices(selected_device.index)
     sample_rate = PREFERRED_SAMPLE_RATE
 
     # 优先使用 16000 Hz；设备不支持时，兼容到设备的默认采样率。
     try:
         sd.check_input_settings(
+            device=selected_device.index,
             channels=CHANNELS,
             dtype="float32",
             samplerate=sample_rate,
@@ -32,15 +36,21 @@ async def audio_worker(
         print(f"[Audio] 设备不支持 16000 Hz，改用 {sample_rate} Hz")
 
     chunk_samples = int(sample_rate * CHUNK_DURATION_SECONDS)
+    audio_error = None
 
     try:
         # InputStream 表示 Audio Stream（音频流），不会先录制完整 wav 文件。
         with sd.InputStream(
+            device=selected_device.index,
             samplerate=sample_rate,
             channels=CHANNELS,
             dtype="float32",
         ) as stream:
-            print(f"麦克风已启动：{device_info['name']}")
+            default_label = " (Default)" if uses_default else ""
+            print(
+                f"麦克风已启动：[{selected_device.index}] "
+                f"{device_info['name']}{default_label}"
+            )
             print(
                 f"[Audio] {sample_rate} Hz | 单声道 | "
                 f"每个 Chunk {chunk_samples} samples"
@@ -74,6 +84,7 @@ async def audio_worker(
 
     except sd.PortAudioError as error:
         print(f"[Audio] 无法打开或读取麦克风：{error}")
+        audio_error = error
         stop_event.set()
     finally:
         microphone_ready.set()
@@ -82,6 +93,12 @@ async def audio_worker(
         await audio_queue.put(None)
         print("麦克风已停止")
         print("Audio Worker 已结束")
+
+    if audio_error is not None:
+        raise AudioRoutingError(
+            "Microphone unavailable: "
+            f"[{selected_device.index}] {selected_device.name}: {audio_error}"
+        ) from audio_error
 
 
 async def wait_for_stop(
@@ -97,4 +114,3 @@ async def wait_for_stop(
     # input() 也是阻塞操作，放到线程中，避免阻塞事件循环。
     await asyncio.to_thread(input, "按 Enter 停止\n")
     stop_event.set()
-

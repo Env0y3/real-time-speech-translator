@@ -2,7 +2,10 @@ import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+
+EventCallback = Callable[[dict[str, Any]], None]
 
 
 def create_session_id() -> str:
@@ -13,10 +16,30 @@ def create_session_id() -> str:
 class PerformanceLogger:
     """以 JSONL 追加方式保存同一运行会话的延迟记录。"""
 
-    def __init__(self, log_path: Path, session_id: str) -> None:
+    def __init__(
+        self,
+        log_path: Path,
+        session_id: str,
+        event_callback: EventCallback | None = None,
+    ) -> None:
         self.log_path = log_path
         self.session_id = session_id
+        self.event_callback = event_callback
         self._write_lock = asyncio.Lock()
+
+    def emit_event(self, record: dict[str, Any]) -> None:
+        """把结构化事件同步转发给可选 UI；回调失败不影响 Pipeline。"""
+        if self.event_callback is None:
+            return
+        event = {
+            **record,
+            "type": record.get("type", record.get("event", "event")),
+            "session_id": self.session_id,
+        }
+        try:
+            self.event_callback(event)
+        except Exception as error:
+            print(f"[Event Callback Warning] {type(error).__name__}")
 
     def _append_sync(self, record: dict[str, Any]) -> None:
         """同步追加一行 JSON；由后台线程调用，避免阻塞 Event Loop。"""
@@ -30,6 +53,7 @@ class PerformanceLogger:
             **record,
             "session_id": self.session_id,
         }
+        self.emit_event(record_with_session)
         try:
             # Lock（锁）防止 Translation 与 TTS 同时写入造成行内容交错。
             async with self._write_lock:

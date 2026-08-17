@@ -1,56 +1,23 @@
 import asyncio
-import os
-from functools import partial
 
 from vosk import SetLogLevel
 
 from asr.sensevoice_asr import sensevoice_asr_worker
 from asr.vosk_asr import vosk_asr_worker
-from core.audio import audio_worker, wait_for_stop
-from scripts.benchmark import benchmark_worker
 from config import (
     ASR_PROVIDER,
-    ELEVENLABS_AUDIO_QUEUE_MAXSIZE,
-    ELEVENLABS_CHANNELS,
-    ELEVENLABS_DTYPE,
-    ELEVENLABS_MODEL_ID,
-    ELEVENLABS_OUTPUT_FORMAT,
-    ELEVENLABS_SAMPLE_RATE,
-    ELEVENLABS_VOICE_ID,
-    FALSE_TRIGGER_FILLERS,
-    FALSE_TRIGGER_FILTER_ENABLED,
-    FALSE_TRIGGER_MAX_SPEECH_SECONDS,
     HOTWORDS_PATH,
     HOTWORD_TEST_SENTENCES,
-    INPUT_VALIDITY_GUARD_ENABLED,
-    LOCAL_MONITOR_DEVICE,
-    LOCAL_MONITOR_ENABLED,
     MODEL_PATH,
-    NORMAL_ASR_PROVIDER,
-    NORMAL_HOTWORD_CORRECTION_ENABLED,
-    RUNTIME_LATENCY_LOG_PATH,
     SENSEVOICE_MODEL_NAME,
-    STREAMING_TRANSLATION_ENABLED,
-    STREAMING_TRANSLATION_MAX_CHARS,
-    STREAMING_TRANSLATION_MIN_CHARS,
-    STREAMING_TRANSLATION_TARGET_CHARS,
     TEST_SENTENCES,
-    TTS_PROVIDER,
-    TRANSLATION_OUTPUT_DEVICE,
     VOSK_MODEL_NAME,
 )
-from core.elevenlabs_tts import elevenlabs_tts_worker
-from core.audio_devices import (
-    AudioRoutingError,
-    build_audio_routing_plan,
-    print_audio_routing,
-)
-from core.false_trigger_filter import false_trigger_filter_worker
-from core.hotwords import hotword_correction_worker, load_hotwords
-from core.input_guard import input_validity_guard_worker
-from core.performance_logger import PerformanceLogger, create_session_id
-from core.translation import streaming_translation_worker, translation_worker
-from core.tts import tts_worker
+from core.audio import audio_worker, wait_for_stop
+from core.audio_devices import AudioRoutingError
+from core.hotwords import load_hotwords
+from core.pipeline import run_normal_pipeline
+from scripts.benchmark import benchmark_worker
 
 
 def choose_run_mode() -> str | None:
@@ -65,7 +32,6 @@ def choose_run_mode() -> str | None:
         except EOFError:
             print("没有收到模式选择，程序结束")
             return None
-
         if run_mode in {"1", "2"}:
             return run_mode
         print("输入无效，请输入 1 或 2")
@@ -83,7 +49,6 @@ def choose_benchmark_type() -> str | None:
         except EOFError:
             print("没有收到 Benchmark 类型，程序结束")
             return None
-
         if choice == "1":
             return "general"
         if choice == "2":
@@ -103,7 +68,6 @@ def choose_correction_mode() -> bool | None:
         except EOFError:
             print("没有收到 Correction 模式，程序结束")
             return None
-
         if choice == "1":
             return False
         if choice == "2":
@@ -111,349 +75,94 @@ def choose_correction_mode() -> bool | None:
         print("输入无效，请输入 1 或 2")
 
 
-async def main() -> None:
-    run_mode = choose_run_mode()
-    if run_mode is None:
+async def run_benchmark_mode() -> None:
+    benchmark_type = choose_benchmark_type()
+    if benchmark_type is None:
         return
 
-    benchmark_type = "general"
     correction_enabled = False
     hotwords = []
     test_sentences = TEST_SENTENCES
-
-    if run_mode == "2":
-        selected_benchmark_type = choose_benchmark_type()
-        if selected_benchmark_type is None:
+    if benchmark_type == "english_hotword":
+        selected_correction_mode = choose_correction_mode()
+        if selected_correction_mode is None:
             return
-        benchmark_type = selected_benchmark_type
+        correction_enabled = selected_correction_mode
+        hotwords = load_hotwords(HOTWORDS_PATH)
+        test_sentences = HOTWORD_TEST_SENTENCES
+        print(
+            "Hotword Post Correction: "
+            f"{'ON' if correction_enabled else 'OFF'}"
+        )
+        if correction_enabled:
+            print(f"[Hotword] 已加载 {len(hotwords)} 个热词")
+            print("[Hotword] Post Correction enabled")
+            print("[Hotword] 这是识别后纠错，不是模型级 Hotword Biasing。")
 
-        if benchmark_type == "english_hotword":
-            selected_correction_mode = choose_correction_mode()
-            if selected_correction_mode is None:
-                return
-            correction_enabled = selected_correction_mode
-            hotwords = load_hotwords(HOTWORDS_PATH)
-            test_sentences = HOTWORD_TEST_SENTENCES
-            print(
-                "Hotword Post Correction: "
-                f"{'ON' if correction_enabled else 'OFF'}"
-            )
-
-            if correction_enabled:
-                print(f"[Hotword] 已加载 {len(hotwords)} 个热词")
-                print("[Hotword] Post Correction enabled")
-                print(
-                    "[Hotword] 这是识别后纠错，不是模型级 Hotword Biasing。"
-                )
-
-    if (
-        run_mode == "2"
-        and ASR_PROVIDER not in {"vosk", "sensevoice"}
-    ):
+    if ASR_PROVIDER not in {"vosk", "sensevoice"}:
         print('ASR_PROVIDER 只支持 "vosk" 或 "sensevoice"')
         return
-
-    if (
-        run_mode == "1"
-        and NORMAL_ASR_PROVIDER not in {"vosk", "sensevoice"}
-    ):
-        print('NORMAL_ASR_PROVIDER 只支持 "vosk" 或 "sensevoice"')
-        return
-
-    uses_vosk = (
-        run_mode == "1" and NORMAL_ASR_PROVIDER == "vosk"
-    ) or (
-        run_mode == "2" and ASR_PROVIDER == "vosk"
-    )
-    if uses_vosk and not MODEL_PATH.exists():
+    if ASR_PROVIDER == "vosk" and not MODEL_PATH.exists():
         print(f"找不到 Vosk 中文模型：{MODEL_PATH}")
         return
 
-    if run_mode == "1" and not os.environ.get("DEEPSEEK_API_KEY"):
-        print("缺少 DEEPSEEK_API_KEY")
-        return
-
-    if run_mode == "1" and TTS_PROVIDER not in {"pyttsx3", "elevenlabs"}:
-        print('TTS_PROVIDER 只支持 "pyttsx3" 或 "elevenlabs"')
-        return
-
-    if (
-        run_mode == "1"
-        and TTS_PROVIDER == "elevenlabs"
-        and not os.environ.get("ELEVENLABS_API_KEY")
-    ):
-        print("缺少 ELEVENLABS_API_KEY")
-        return
-
-    audio_routing_plan = None
-    if run_mode == "1" and TTS_PROVIDER == "elevenlabs":
-        try:
-            audio_routing_plan = build_audio_routing_plan(
-                TRANSLATION_OUTPUT_DEVICE,
-                LOCAL_MONITOR_ENABLED,
-                LOCAL_MONITOR_DEVICE,
-                ELEVENLABS_SAMPLE_RATE,
-                ELEVENLABS_CHANNELS,
-                ELEVENLABS_DTYPE,
-            )
-        except AudioRoutingError as error:
-            print("[Audio Routing Error]")
-            print(error)
-            return
-        print_audio_routing(audio_routing_plan)
-
     SetLogLevel(-1)
-
     audio_queue = asyncio.Queue(maxsize=5)
     text_queue = asyncio.Queue(maxsize=5)
     stop_event = asyncio.Event()
     microphone_ready = asyncio.Event()
+    asr_ready = asyncio.Event()
 
-    if run_mode == "2":
-        asr_ready = asyncio.Event()
-
-        if ASR_PROVIDER == "vosk":
-            benchmark_asr_worker = vosk_asr_worker(
-                audio_queue,
-                text_queue,
-                benchmark_mode=True,
-                asr_ready=asr_ready,
-            )
-            benchmark_model_name = VOSK_MODEL_NAME
-        else:
-            benchmark_asr_worker = sensevoice_asr_worker(
-                audio_queue,
-                text_queue,
-                asr_ready,
-                benchmark_mode=True,
-            )
-            benchmark_model_name = SENSEVOICE_MODEL_NAME
-
-        await asyncio.gather(
-            audio_worker(audio_queue, stop_event, microphone_ready),
-            benchmark_asr_worker,
-            benchmark_worker(
-                text_queue,
-                stop_event,
-                microphone_ready,
-                asr_ready,
-                ASR_PROVIDER,
-                benchmark_model_name,
-                test_sentences,
-                benchmark_type,
-                correction_enabled,
-                hotwords,
-            ),
-            wait_for_stop(stop_event, microphone_ready),
+    if ASR_PROVIDER == "vosk":
+        asr_worker = vosk_asr_worker(
+            audio_queue,
+            text_queue,
+            benchmark_mode=True,
+            asr_ready=asr_ready,
         )
+        model_name = VOSK_MODEL_NAME
     else:
-        session_id = create_session_id()
-        performance_logger = PerformanceLogger(
-            RUNTIME_LATENCY_LOG_PATH,
-            session_id,
+        asr_worker = sensevoice_asr_worker(
+            audio_queue,
+            text_queue,
+            asr_ready,
+            benchmark_mode=True,
         )
-        await performance_logger.log(
-            {
-                "event": "session_start",
-                "streaming_translation_enabled": (
-                    STREAMING_TRANSLATION_ENABLED
-                ),
-                "tts_provider": TTS_PROVIDER,
-                "audio_playback_queue_maxsize": (
-                    ELEVENLABS_AUDIO_QUEUE_MAXSIZE
-                    if TTS_PROVIDER == "elevenlabs"
-                    else None
-                ),
-                "translation_min_chars": (
-                    STREAMING_TRANSLATION_MIN_CHARS
-                ),
-                "translation_target_chars": (
-                    STREAMING_TRANSLATION_TARGET_CHARS
-                ),
-                "translation_max_chars": (
-                    STREAMING_TRANSLATION_MAX_CHARS
-                ),
-                "false_trigger_filter_enabled": (
-                    FALSE_TRIGGER_FILTER_ENABLED
-                ),
-                "input_validity_guard_enabled": (
-                    INPUT_VALIDITY_GUARD_ENABLED
-                ),
-                "false_trigger_max_speech_ms": (
-                    FALSE_TRIGGER_MAX_SPEECH_SECONDS * 1000
-                ),
-                "false_trigger_fillers": sorted(FALSE_TRIGGER_FILLERS),
-                "translation_output_device": (
-                    audio_routing_plan.translation_device.index
-                    if audio_routing_plan is not None
-                    else None
-                ),
-                "translation_output_device_name": (
-                    audio_routing_plan.translation_device.name
-                    if audio_routing_plan is not None
-                    else None
-                ),
-                "translation_output_uses_default": (
-                    audio_routing_plan.translation_uses_default
-                    if audio_routing_plan is not None
-                    else None
-                ),
-                "local_monitor_enabled": (
-                    audio_routing_plan.monitor_enabled
-                    if audio_routing_plan is not None
-                    else False
-                ),
-                "monitor_device": (
-                    audio_routing_plan.monitor_device.index
-                    if audio_routing_plan is not None
-                    and audio_routing_plan.monitor_device is not None
-                    else None
-                ),
-            }
-        )
-        print(f"Latency Session ID: {session_id}")
+        model_name = SENSEVOICE_MODEL_NAME
 
-        # 流式模式允许短时间缓存多个英文语块，避免TTS播放期间过早触发
-        # Backpressure（背压）并暂停DeepSeek流读取；旧模式仍保持原容量。
-        translated_queue = asyncio.Queue(
-            maxsize=20 if STREAMING_TRANSLATION_ENABLED else 5
-        )
-        selected_translation_worker = (
-            streaming_translation_worker
-            if STREAMING_TRANSLATION_ENABLED
-            else translation_worker
-        )
-        selected_tts_worker = (
-            partial(
-                elevenlabs_tts_worker,
-                audio_routing=audio_routing_plan,
-            )
-            if TTS_PROVIDER == "elevenlabs"
-            else tts_worker
-        )
-        print(
-            "Streaming Translation: "
-            f"{'ON' if STREAMING_TRANSLATION_ENABLED else 'OFF'}"
-        )
-        print(f"TTS Provider: {TTS_PROVIDER}")
-        if TTS_PROVIDER == "elevenlabs":
-            print(f"Voice: {ELEVENLABS_VOICE_ID}")
-            print(f"Model: {ELEVENLABS_MODEL_ID}")
-            print(f"Output: {ELEVENLABS_OUTPUT_FORMAT}")
-
-        if NORMAL_ASR_PROVIDER == "vosk":
-            print("Normal ASR: Vosk")
-
-            # Vosk Normal Mode 保留原来的完整端到端数据流。
-            await asyncio.gather(
-                audio_worker(audio_queue, stop_event, microphone_ready),
-                vosk_asr_worker(audio_queue, text_queue),
-                selected_translation_worker(
-                    text_queue,
-                    translated_queue,
-                    performance_logger,
-                ),
-                selected_tts_worker(translated_queue, performance_logger),
-                wait_for_stop(stop_event, microphone_ready),
-            )
-        else:
-            print("Normal ASR: SenseVoiceSmall")
-            print(
-                "Hotword Post Correction: "
-                f"{'ON' if NORMAL_HOTWORD_CORRECTION_ENABLED else 'OFF'}"
-            )
-            print(
-                "Input Validity Guard: "
-                f"{'ON' if INPUT_VALIDITY_GUARD_ENABLED else 'OFF'}"
-            )
-            print(
-                "False Trigger Filter: "
-                f"{'ON' if FALSE_TRIGGER_FILTER_ENABLED else 'OFF'}"
-            )
-            normal_asr_ready = asyncio.Event()
-            raw_text_queue = text_queue
-            valid_text_queue = asyncio.Queue(maxsize=5)
-            filtered_text_queue = asyncio.Queue(maxsize=5)
-
-            if NORMAL_HOTWORD_CORRECTION_ENABLED:
-                corrected_text_queue = asyncio.Queue(maxsize=5)
-                normal_hotwords = load_hotwords(HOTWORDS_PATH)
-
-                await asyncio.gather(
-                    audio_worker(audio_queue, stop_event, microphone_ready),
-                    sensevoice_asr_worker(
-                        audio_queue,
-                        raw_text_queue,
-                        normal_asr_ready,
-                        benchmark_mode=False,
-                        trace_session_id=session_id,
-                    ),
-                    input_validity_guard_worker(
-                        raw_text_queue,
-                        valid_text_queue,
-                        performance_logger,
-                    ),
-                    false_trigger_filter_worker(
-                        valid_text_queue,
-                        filtered_text_queue,
-                        performance_logger,
-                    ),
-                    hotword_correction_worker(
-                        filtered_text_queue,
-                        corrected_text_queue,
-                        normal_hotwords,
-                    ),
-                    selected_translation_worker(
-                        corrected_text_queue,
-                        translated_queue,
-                        performance_logger,
-                    ),
-                    selected_tts_worker(
-                        translated_queue,
-                        performance_logger,
-                    ),
-                    wait_for_stop(stop_event, microphone_ready),
-                )
-            else:
-                await asyncio.gather(
-                    audio_worker(audio_queue, stop_event, microphone_ready),
-                    sensevoice_asr_worker(
-                        audio_queue,
-                        raw_text_queue,
-                        normal_asr_ready,
-                        benchmark_mode=False,
-                        trace_session_id=session_id,
-                    ),
-                    input_validity_guard_worker(
-                        raw_text_queue,
-                        valid_text_queue,
-                        performance_logger,
-                    ),
-                    false_trigger_filter_worker(
-                        valid_text_queue,
-                        filtered_text_queue,
-                        performance_logger,
-                    ),
-                    selected_translation_worker(
-                        filtered_text_queue,
-                        translated_queue,
-                        performance_logger,
-                    ),
-                    selected_tts_worker(
-                        translated_queue,
-                        performance_logger,
-                    ),
-                    wait_for_stop(stop_event, microphone_ready),
-                )
-
-        await performance_logger.log({"event": "session_end"})
-
+    await asyncio.gather(
+        audio_worker(audio_queue, stop_event, microphone_ready),
+        asr_worker,
+        benchmark_worker(
+            text_queue,
+            stop_event,
+            microphone_ready,
+            asr_ready,
+            ASR_PROVIDER,
+            model_name,
+            test_sentences,
+            benchmark_type,
+            correction_enabled,
+            hotwords,
+        ),
+        wait_for_stop(stop_event, microphone_ready),
+    )
     print("所有任务正常退出")
+
+
+async def main() -> None:
+    run_mode = choose_run_mode()
+    if run_mode is None:
+        return
+    if run_mode == "1":
+        await run_normal_pipeline(interactive_stop=True)
+    else:
+        await run_benchmark_mode()
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except AudioRoutingError as error:
-        print("[Audio Routing Error]")
+    except (AudioRoutingError, ValueError) as error:
+        print("[Startup Error]")
         print(error)
