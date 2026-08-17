@@ -20,6 +20,7 @@ from config import (
     STREAMING_TRANSLATION_TARGET_CHARS,
     TRANSLATION_SYSTEM_PROMPT,
 )
+from performance_logger import PerformanceLogger
 
 
 TRANSLATION_BOUNDARY_PUNCTUATION = ",.!?;:"
@@ -132,6 +133,7 @@ def extract_translation_segments(
 async def translation_worker(
     text_queue: asyncio.Queue,
     translated_queue: asyncio.Queue,
+    performance_logger: PerformanceLogger | None = None,
 ) -> None:
     """消费稳定中文文本，通过 DeepSeek 翻译成英文。"""
     api_key = os.environ.get("DEEPSEEK_API_KEY")
@@ -147,6 +149,7 @@ async def translation_worker(
         max_retries=0,
     )
     print(f"Translation 已就绪：DeepSeek {DEEPSEEK_MODEL}")
+    sentence_id = 0
 
     try:
         while True:
@@ -157,6 +160,7 @@ async def translation_worker(
                 print("Translation Worker 已结束")
                 break
 
+            sentence_id += 1
             request_started_at = time.perf_counter()
 
             try:
@@ -178,7 +182,23 @@ async def translation_worker(
                 print(f"英文：{english_text}")
                 print(f"翻译耗时：{latency_ms:.0f} ms")
                 await translated_queue.put(
-                    (english_text, translation_finished_at)
+                    (
+                        english_text,
+                        translation_finished_at,
+                        sentence_id,
+                        1,
+                    )
+                )
+                await _log_translation_result(
+                    performance_logger,
+                    sentence_id,
+                    chinese_text,
+                    english_text,
+                    None,
+                    latency_ms,
+                    latency_ms,
+                    1,
+                    False,
                 )
 
             except APITimeoutError:
@@ -220,9 +240,11 @@ def _print_streaming_metrics(
     first_segment_at: float | None,
     translation_finished_at: float,
     segment_count: int,
-) -> None:
+) -> tuple[float | None, float | None, float]:
     """打印TTFT、TTFS和完整流式翻译耗时。"""
     print("\n[Streaming Translation]")
+    ttft_ms = None
+    ttfs_ms = None
     if first_token_at is not None:
         # TTFT（Time To First Token，首Token延迟）。
         ttft_ms = (first_token_at - request_started_at) * 1000
@@ -242,6 +264,36 @@ def _print_streaming_metrics(
     ) * 1000
     print(f"Translation Total Latency: {total_latency_ms:.0f} ms")
     print(f"Segment Count: {segment_count}")
+    return ttft_ms, ttfs_ms, total_latency_ms
+
+
+async def _log_translation_result(
+    performance_logger: PerformanceLogger | None,
+    sentence_id: int,
+    source_text: str,
+    full_translation: str,
+    ttft_ms: float | None,
+    ttfs_ms: float | None,
+    translation_total_ms: float,
+    segment_count: int,
+    streaming_enabled: bool,
+) -> None:
+    """保存一句翻译的结构化延迟数据；缺失指标使用 JSON null。"""
+    if performance_logger is None:
+        return
+    await performance_logger.log(
+        {
+            "event": "translation",
+            "sentence_id": sentence_id,
+            "source_text": source_text,
+            "full_translation": full_translation,
+            "ttft_ms": ttft_ms,
+            "ttfs_ms": ttfs_ms,
+            "translation_total_ms": translation_total_ms,
+            "segment_count": segment_count,
+            "streaming_enabled": streaming_enabled,
+        }
+    )
 
 
 async def _fallback_to_full_translation(
@@ -250,6 +302,8 @@ async def _fallback_to_full_translation(
     translated_queue: asyncio.Queue,
     request_started_at: float,
     first_token_at: float | None,
+    sentence_id: int,
+    performance_logger: PerformanceLogger | None,
 ) -> None:
     """流式请求在首段输出前失败时，回退到原来的完整翻译。"""
     print("[Streaming Translation] 回退到完整翻译")
@@ -271,19 +325,33 @@ async def _fallback_to_full_translation(
     print(english_text)
     print("\n[Full Streaming Translation]")
     print(english_text)
-    await translated_queue.put((english_text, segment_ready_at))
-    _print_streaming_metrics(
+    await translated_queue.put(
+        (english_text, segment_ready_at, sentence_id, 1)
+    )
+    ttft_ms, ttfs_ms, total_latency_ms = _print_streaming_metrics(
         request_started_at,
         first_token_at,
         segment_ready_at,
         segment_ready_at,
         1,
     )
+    await _log_translation_result(
+        performance_logger,
+        sentence_id,
+        chinese_text,
+        english_text,
+        ttft_ms,
+        ttfs_ms,
+        total_latency_ms,
+        1,
+        True,
+    )
 
 
 async def streaming_translation_worker(
     text_queue: asyncio.Queue,
     translated_queue: asyncio.Queue,
+    performance_logger: PerformanceLogger | None = None,
 ) -> None:
     """消费中文文本，持续接收DeepSeek增量内容并按稳定语块输出。"""
     api_key = os.environ.get("DEEPSEEK_API_KEY")
@@ -299,6 +367,7 @@ async def streaming_translation_worker(
         max_retries=0,
     )
     print(f"Streaming Translation 已就绪：DeepSeek {DEEPSEEK_MODEL}")
+    sentence_id = 0
 
     try:
         while True:
@@ -309,6 +378,7 @@ async def streaming_translation_worker(
                 print("Streaming Translation Worker 已结束")
                 break
 
+            sentence_id += 1
             request_started_at = time.perf_counter()
             print("\n[Streaming Translation Request]")
             print(f"中文：{chinese_text}")
@@ -330,8 +400,15 @@ async def streaming_translation_worker(
                 print(f"\n[Translation Segment {segment_count}]")
                 print(segment)
 
-                # TTS仍消费原有二元组；此时间表示该segment准备完成的时刻。
-                await translated_queue.put((segment, segment_ready_at))
+                # 同一Queue继续传递文本、准备时间、句子编号和语块编号。
+                await translated_queue.put(
+                    (
+                        segment,
+                        segment_ready_at,
+                        sentence_id,
+                        segment_count,
+                    )
+                )
 
             stream = None
             try:
@@ -401,6 +478,8 @@ async def streaming_translation_worker(
                         translated_queue,
                         request_started_at,
                         first_token_at,
+                        sentence_id,
+                        performance_logger,
                     )
                     continue
 
@@ -414,12 +493,25 @@ async def streaming_translation_worker(
                 print("\n[Partial Streaming Translation]")
                 print(full_translation)
                 translation_finished_at = time.perf_counter()
-                _print_streaming_metrics(
-                    request_started_at,
-                    first_token_at,
-                    first_segment_at,
-                    translation_finished_at,
+                ttft_ms, ttfs_ms, total_latency_ms = (
+                    _print_streaming_metrics(
+                        request_started_at,
+                        first_token_at,
+                        first_segment_at,
+                        translation_finished_at,
+                        segment_count,
+                    )
+                )
+                await _log_translation_result(
+                    performance_logger,
+                    sentence_id,
+                    chinese_text,
+                    full_translation,
+                    ttft_ms,
+                    ttfs_ms,
+                    total_latency_ms,
                     segment_count,
+                    True,
                 )
                 continue
 
@@ -431,6 +523,8 @@ async def streaming_translation_worker(
                     translated_queue,
                     request_started_at,
                     first_token_at,
+                    sentence_id,
+                    performance_logger,
                 )
                 continue
 
@@ -444,12 +538,23 @@ async def streaming_translation_worker(
             print("\n[Full Streaming Translation]")
             print(full_translation)
             translation_finished_at = time.perf_counter()
-            _print_streaming_metrics(
+            ttft_ms, ttfs_ms, total_latency_ms = _print_streaming_metrics(
                 request_started_at,
                 first_token_at,
                 first_segment_at,
                 translation_finished_at,
                 segment_count,
+            )
+            await _log_translation_result(
+                performance_logger,
+                sentence_id,
+                chinese_text,
+                full_translation,
+                ttft_ms,
+                ttfs_ms,
+                total_latency_ms,
+                segment_count,
+                True,
             )
     finally:
         await client.close()

@@ -14,12 +14,17 @@ from config import (
     MODEL_PATH,
     NORMAL_ASR_PROVIDER,
     NORMAL_HOTWORD_CORRECTION_ENABLED,
+    RUNTIME_LATENCY_LOG_PATH,
     SENSEVOICE_MODEL_NAME,
     STREAMING_TRANSLATION_ENABLED,
+    STREAMING_TRANSLATION_MAX_CHARS,
+    STREAMING_TRANSLATION_MIN_CHARS,
+    STREAMING_TRANSLATION_TARGET_CHARS,
     TEST_SENTENCES,
     VOSK_MODEL_NAME,
 )
 from hotwords import hotword_correction_worker, load_hotwords
+from performance_logger import PerformanceLogger, create_session_id
 from translation import streaming_translation_worker, translation_worker
 from tts import tts_worker
 
@@ -189,6 +194,31 @@ async def main() -> None:
             wait_for_stop(stop_event, microphone_ready),
         )
     else:
+        session_id = create_session_id()
+        performance_logger = PerformanceLogger(
+            RUNTIME_LATENCY_LOG_PATH,
+            session_id,
+        )
+        await performance_logger.log(
+            {
+                "event": "session_start",
+                "streaming_translation_enabled": (
+                    STREAMING_TRANSLATION_ENABLED
+                ),
+                "tts_provider": "pyttsx3",
+                "translation_min_chars": (
+                    STREAMING_TRANSLATION_MIN_CHARS
+                ),
+                "translation_target_chars": (
+                    STREAMING_TRANSLATION_TARGET_CHARS
+                ),
+                "translation_max_chars": (
+                    STREAMING_TRANSLATION_MAX_CHARS
+                ),
+            }
+        )
+        print(f"Latency Session ID: {session_id}")
+
         # 流式模式允许短时间缓存多个英文语块，避免TTS播放期间过早触发
         # Backpressure（背压）并暂停DeepSeek流读取；旧模式仍保持原容量。
         translated_queue = asyncio.Queue(
@@ -211,8 +241,12 @@ async def main() -> None:
             await asyncio.gather(
                 audio_worker(audio_queue, stop_event, microphone_ready),
                 vosk_asr_worker(audio_queue, text_queue),
-                selected_translation_worker(text_queue, translated_queue),
-                tts_worker(translated_queue),
+                selected_translation_worker(
+                    text_queue,
+                    translated_queue,
+                    performance_logger,
+                ),
+                tts_worker(translated_queue, performance_logger),
                 wait_for_stop(stop_event, microphone_ready),
             )
         else:
@@ -244,8 +278,9 @@ async def main() -> None:
                     selected_translation_worker(
                         corrected_text_queue,
                         translated_queue,
+                        performance_logger,
                     ),
-                    tts_worker(translated_queue),
+                    tts_worker(translated_queue, performance_logger),
                     wait_for_stop(stop_event, microphone_ready),
                 )
             else:
@@ -260,10 +295,13 @@ async def main() -> None:
                     selected_translation_worker(
                         raw_text_queue,
                         translated_queue,
+                        performance_logger,
                     ),
-                    tts_worker(translated_queue),
+                    tts_worker(translated_queue, performance_logger),
                     wait_for_stop(stop_event, microphone_ready),
                 )
+
+        await performance_logger.log({"event": "session_end"})
 
     print("所有任务正常退出")
 

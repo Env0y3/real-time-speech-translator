@@ -61,6 +61,7 @@ MODEL_PATH = (
 BENCHMARK_RESULTS_PATH = (
     PROJECT_ROOT / "asr_benchmark_results.jsonl"
 )
+RUNTIME_LATENCY_LOG_PATH = PROJECT_ROOT / "runtime_latency_log.jsonl"
 HOTWORDS_PATH = PROJECT_ROOT / "hotwords.json"
 NORMALIZATION_PUNCTUATION = set(
     "，。！？；：、“”‘’,.!?;:\"'"

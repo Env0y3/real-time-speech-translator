@@ -3,6 +3,8 @@ import time
 
 import pyttsx3
 
+from performance_logger import PerformanceLogger
+
 
 def speak_sync(english_text: str) -> float | None:
     """同步播放一句英文，并返回 TTS 首音事件的近似时间。"""
@@ -37,9 +39,14 @@ def speak_sync(english_text: str) -> float | None:
     return first_audio_started_at
 
 
-async def tts_worker(translated_queue: asyncio.Queue) -> None:
+async def tts_worker(
+    translated_queue: asyncio.Queue,
+    performance_logger: PerformanceLogger | None = None,
+) -> None:
     """消费英文翻译，并通过扬声器逐句播放。"""
     print("TTS 已就绪：pyttsx3 英文语音")
+    previous_sentence_id = None
+    previous_playback_finished_at = None
 
     while True:
         queue_item = await translated_queue.get()
@@ -48,11 +55,19 @@ async def tts_worker(translated_queue: asyncio.Queue) -> None:
             print("[TTS] 播放任务结束")
             break
 
-        english_text, translation_finished_at = queue_item
+        (
+            english_text,
+            segment_ready_at,
+            sentence_id,
+            segment_index,
+        ) = queue_item
+        processing_started_at = time.perf_counter()
+        queue_wait_ms = (
+            processing_started_at - segment_ready_at
+        ) * 1000
 
         print("\n[TTS]")
         print(f"准备播放：{english_text}", flush=True)
-        playback_started_at = time.perf_counter()
 
         try:
             first_audio_started_at = await asyncio.to_thread(
@@ -63,16 +78,58 @@ async def tts_worker(translated_queue: asyncio.Queue) -> None:
             print(f"[TTS Error] 播放失败：{type(error).__name__}")
             continue
 
+        playback_finished_at = time.perf_counter()
         total_playback_ms = (
-            time.perf_counter() - playback_started_at
+            playback_finished_at - processing_started_at
         ) * 1000
         print("[TTS] 播放完成", flush=True)
+
+        tts_startup_ms = None
+        segment_ready_to_audio_ms = None
+        segment_gap_ms = None
         if first_audio_started_at is not None:
-            ttfa_ms = (
-                first_audio_started_at - translation_finished_at
+            # TTS Startup：Worker开始处理到started-word首次触发。
+            tts_startup_ms = (
+                first_audio_started_at - processing_started_at
             ) * 1000
-            print(f"TTFA: {ttfa_ms:.0f} ms（TTS 首音近似值）")
+            # Segment Ready → First Audio，沿用终端里的TTFA近似指标。
+            segment_ready_to_audio_ms = (
+                first_audio_started_at - segment_ready_at
+            ) * 1000
+            if (
+                segment_index > 1
+                and previous_sentence_id == sentence_id
+                and previous_playback_finished_at is not None
+            ):
+                segment_gap_ms = (
+                    first_audio_started_at
+                    - previous_playback_finished_at
+                ) * 1000
+            print(
+                "TTFA: "
+                f"{segment_ready_to_audio_ms:.0f} ms"
+                "（TTS 首音近似值）"
+            )
         else:
             print("TTFA: 无法获取 started-word 事件")
         print(f"TTS Total Playback: {total_playback_ms:.0f} ms")
 
+        if performance_logger is not None:
+            await performance_logger.log(
+                {
+                    "event": "tts_segment",
+                    "sentence_id": sentence_id,
+                    "segment_index": segment_index,
+                    "text": english_text,
+                    "queue_wait_ms": queue_wait_ms,
+                    "tts_startup_ms": tts_startup_ms,
+                    "segment_ready_to_audio_ms": (
+                        segment_ready_to_audio_ms
+                    ),
+                    "playback_total_ms": total_playback_ms,
+                    "segment_gap_ms": segment_gap_ms,
+                }
+            )
+
+        previous_sentence_id = sentence_id
+        previous_playback_finished_at = playback_finished_at
