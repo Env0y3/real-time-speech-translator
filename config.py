@@ -6,7 +6,14 @@ PREFERRED_SAMPLE_RATE = 16_000  # Sample Rate（采样率）：每秒 16000 个�
 CHANNELS = 1  # Channel（声道）：1 表示单声道
 CHUNK_DURATION_SECONDS = 0.2  # Chunk（音频块）：每块大约 200 ms
 VAD_RMS_THRESHOLD = 10.0  # RMS 高于此值时认为当前有人说话
-ENDPOINT_SILENCE_SECONDS = 0.6  # 连续静音达到此时长时认为一句话结束
+ENDPOINT_BASE_SECONDS = 0.5  # Base Threshold（基础句尾静音阈值）
+ENDPOINT_MIN_SECONDS = 0.4  # 动态阈值下限
+ENDPOINT_MAX_SECONDS = 0.8  # 动态阈值上限
+ENDPOINT_ADAPTIVE_ENABLED = True
+ENDPOINT_SAFETY_MARGIN_SECONDS = 0.20
+ENDPOINT_SMOOTHING_ALPHA = 0.3  # EMA（指数移动平均）的平滑系数
+# 保留旧常量名，Vosk 和其他固定模式继续读取统一的 0.5 秒基线。
+ENDPOINT_SILENCE_SECONDS = ENDPOINT_BASE_SECONDS
 ASR_PROVIDER = "sensevoice"  # Benchmark 可选："vosk" 或 "sensevoice"
 NORMAL_ASR_PROVIDER = "sensevoice"  # Normal Mode 可选："vosk" 或 "sensevoice"
 NORMAL_HOTWORD_CORRECTION_ENABLED = True
@@ -60,6 +67,10 @@ NORMALIZATION_PUNCTUATION = set(
 )
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-v4-flash"
+STREAMING_TRANSLATION_ENABLED = True
+STREAMING_TRANSLATION_MIN_CHARS = 20
+STREAMING_TRANSLATION_TARGET_CHARS = 35
+STREAMING_TRANSLATION_MAX_CHARS = 60
 
 # System Prompt（系统提示词）只定义单一的中译英职责。
 

@@ -15,11 +15,12 @@ from config import (
     NORMAL_ASR_PROVIDER,
     NORMAL_HOTWORD_CORRECTION_ENABLED,
     SENSEVOICE_MODEL_NAME,
+    STREAMING_TRANSLATION_ENABLED,
     TEST_SENTENCES,
     VOSK_MODEL_NAME,
 )
 from hotwords import hotword_correction_worker, load_hotwords
-from translation import translation_worker
+from translation import streaming_translation_worker, translation_worker
 from tts import tts_worker
 
 
@@ -188,7 +189,20 @@ async def main() -> None:
             wait_for_stop(stop_event, microphone_ready),
         )
     else:
-        translated_queue = asyncio.Queue(maxsize=5)
+        # 流式模式允许短时间缓存多个英文语块，避免TTS播放期间过早触发
+        # Backpressure（背压）并暂停DeepSeek流读取；旧模式仍保持原容量。
+        translated_queue = asyncio.Queue(
+            maxsize=20 if STREAMING_TRANSLATION_ENABLED else 5
+        )
+        selected_translation_worker = (
+            streaming_translation_worker
+            if STREAMING_TRANSLATION_ENABLED
+            else translation_worker
+        )
+        print(
+            "Streaming Translation: "
+            f"{'ON' if STREAMING_TRANSLATION_ENABLED else 'OFF'}"
+        )
 
         if NORMAL_ASR_PROVIDER == "vosk":
             print("Normal ASR: Vosk")
@@ -197,7 +211,7 @@ async def main() -> None:
             await asyncio.gather(
                 audio_worker(audio_queue, stop_event, microphone_ready),
                 vosk_asr_worker(audio_queue, text_queue),
-                translation_worker(text_queue, translated_queue),
+                selected_translation_worker(text_queue, translated_queue),
                 tts_worker(translated_queue),
                 wait_for_stop(stop_event, microphone_ready),
             )
@@ -227,7 +241,7 @@ async def main() -> None:
                         corrected_text_queue,
                         normal_hotwords,
                     ),
-                    translation_worker(
+                    selected_translation_worker(
                         corrected_text_queue,
                         translated_queue,
                     ),
@@ -243,7 +257,10 @@ async def main() -> None:
                         normal_asr_ready,
                         benchmark_mode=False,
                     ),
-                    translation_worker(raw_text_queue, translated_queue),
+                    selected_translation_worker(
+                        raw_text_queue,
+                        translated_queue,
+                    ),
                     tts_worker(translated_queue),
                     wait_for_stop(stop_event, microphone_ready),
                 )
