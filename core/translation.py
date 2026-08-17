@@ -26,6 +26,11 @@ from core.performance_logger import PerformanceLogger
 TRANSLATION_BOUNDARY_PUNCTUATION = ",.!?;:"
 
 
+def has_translation_output(text: str) -> bool:
+    """空字符串或纯空白翻译不能产生任何 TTS Queue 消息。"""
+    return bool(text.strip())
+
+
 def _translation_segment_message(
     text: str,
     segment_ready_at: float,
@@ -263,7 +268,7 @@ async def translation_worker(
                     translation_finished_at - request_started_at
                 ) * 1000
 
-                if not english_text:
+                if not has_translation_output(english_text):
                     print("[Translation Error] 模型返回了空文本")
                     continue
 
@@ -428,7 +433,7 @@ async def _fallback_to_full_translation(
         )
         return
 
-    if not english_text:
+    if not has_translation_output(english_text):
         print("[Translation Fallback Error] 模型返回了空文本")
         return
 
@@ -682,18 +687,10 @@ async def streaming_translation_worker(
                 )
                 continue
 
-            if not full_translation:
+            if not has_translation_output(full_translation):
                 print("[Streaming Translation Error] 模型返回了空流")
-                await _fallback_to_full_translation(
-                    client,
-                    chinese_text,
-                    translated_queue,
-                    request_started_at,
-                    first_token_at,
-                    sentence_id,
-                    performance_logger,
-                    trace_metadata,
-                )
+                # 成功结束的空流代表模型按约定返回空内容；不要再次请求，
+                # 也不要向 TTS 发布 segment 或 sentence_end。
                 continue
 
             remaining_segments, buffer = extract_translation_segments(

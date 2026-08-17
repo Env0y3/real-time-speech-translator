@@ -1,5 +1,6 @@
 import asyncio
 import os
+from functools import partial
 
 from vosk import SetLogLevel
 
@@ -10,11 +11,20 @@ from scripts.benchmark import benchmark_worker
 from config import (
     ASR_PROVIDER,
     ELEVENLABS_AUDIO_QUEUE_MAXSIZE,
+    ELEVENLABS_CHANNELS,
+    ELEVENLABS_DTYPE,
     ELEVENLABS_MODEL_ID,
     ELEVENLABS_OUTPUT_FORMAT,
+    ELEVENLABS_SAMPLE_RATE,
     ELEVENLABS_VOICE_ID,
+    FALSE_TRIGGER_FILLERS,
+    FALSE_TRIGGER_FILTER_ENABLED,
+    FALSE_TRIGGER_MAX_SPEECH_SECONDS,
     HOTWORDS_PATH,
     HOTWORD_TEST_SENTENCES,
+    INPUT_VALIDITY_GUARD_ENABLED,
+    LOCAL_MONITOR_DEVICE,
+    LOCAL_MONITOR_ENABLED,
     MODEL_PATH,
     NORMAL_ASR_PROVIDER,
     NORMAL_HOTWORD_CORRECTION_ENABLED,
@@ -26,10 +36,18 @@ from config import (
     STREAMING_TRANSLATION_TARGET_CHARS,
     TEST_SENTENCES,
     TTS_PROVIDER,
+    TRANSLATION_OUTPUT_DEVICE,
     VOSK_MODEL_NAME,
 )
 from core.elevenlabs_tts import elevenlabs_tts_worker
+from core.audio_devices import (
+    AudioRoutingError,
+    build_audio_routing_plan,
+    print_audio_routing,
+)
+from core.false_trigger_filter import false_trigger_filter_worker
 from core.hotwords import hotword_correction_worker, load_hotwords
+from core.input_guard import input_validity_guard_worker
 from core.performance_logger import PerformanceLogger, create_session_id
 from core.translation import streaming_translation_worker, translation_worker
 from core.tts import tts_worker
@@ -167,6 +185,23 @@ async def main() -> None:
         print("缺少 ELEVENLABS_API_KEY")
         return
 
+    audio_routing_plan = None
+    if run_mode == "1" and TTS_PROVIDER == "elevenlabs":
+        try:
+            audio_routing_plan = build_audio_routing_plan(
+                TRANSLATION_OUTPUT_DEVICE,
+                LOCAL_MONITOR_ENABLED,
+                LOCAL_MONITOR_DEVICE,
+                ELEVENLABS_SAMPLE_RATE,
+                ELEVENLABS_CHANNELS,
+                ELEVENLABS_DTYPE,
+            )
+        except AudioRoutingError as error:
+            print("[Audio Routing Error]")
+            print(error)
+            return
+        print_audio_routing(audio_routing_plan)
+
     SetLogLevel(-1)
 
     audio_queue = asyncio.Queue(maxsize=5)
@@ -238,6 +273,42 @@ async def main() -> None:
                 "translation_max_chars": (
                     STREAMING_TRANSLATION_MAX_CHARS
                 ),
+                "false_trigger_filter_enabled": (
+                    FALSE_TRIGGER_FILTER_ENABLED
+                ),
+                "input_validity_guard_enabled": (
+                    INPUT_VALIDITY_GUARD_ENABLED
+                ),
+                "false_trigger_max_speech_ms": (
+                    FALSE_TRIGGER_MAX_SPEECH_SECONDS * 1000
+                ),
+                "false_trigger_fillers": sorted(FALSE_TRIGGER_FILLERS),
+                "translation_output_device": (
+                    audio_routing_plan.translation_device.index
+                    if audio_routing_plan is not None
+                    else None
+                ),
+                "translation_output_device_name": (
+                    audio_routing_plan.translation_device.name
+                    if audio_routing_plan is not None
+                    else None
+                ),
+                "translation_output_uses_default": (
+                    audio_routing_plan.translation_uses_default
+                    if audio_routing_plan is not None
+                    else None
+                ),
+                "local_monitor_enabled": (
+                    audio_routing_plan.monitor_enabled
+                    if audio_routing_plan is not None
+                    else False
+                ),
+                "monitor_device": (
+                    audio_routing_plan.monitor_device.index
+                    if audio_routing_plan is not None
+                    and audio_routing_plan.monitor_device is not None
+                    else None
+                ),
             }
         )
         print(f"Latency Session ID: {session_id}")
@@ -253,7 +324,10 @@ async def main() -> None:
             else translation_worker
         )
         selected_tts_worker = (
-            elevenlabs_tts_worker
+            partial(
+                elevenlabs_tts_worker,
+                audio_routing=audio_routing_plan,
+            )
             if TTS_PROVIDER == "elevenlabs"
             else tts_worker
         )
@@ -288,8 +362,18 @@ async def main() -> None:
                 "Hotword Post Correction: "
                 f"{'ON' if NORMAL_HOTWORD_CORRECTION_ENABLED else 'OFF'}"
             )
+            print(
+                "Input Validity Guard: "
+                f"{'ON' if INPUT_VALIDITY_GUARD_ENABLED else 'OFF'}"
+            )
+            print(
+                "False Trigger Filter: "
+                f"{'ON' if FALSE_TRIGGER_FILTER_ENABLED else 'OFF'}"
+            )
             normal_asr_ready = asyncio.Event()
             raw_text_queue = text_queue
+            valid_text_queue = asyncio.Queue(maxsize=5)
+            filtered_text_queue = asyncio.Queue(maxsize=5)
 
             if NORMAL_HOTWORD_CORRECTION_ENABLED:
                 corrected_text_queue = asyncio.Queue(maxsize=5)
@@ -304,8 +388,18 @@ async def main() -> None:
                         benchmark_mode=False,
                         trace_session_id=session_id,
                     ),
-                    hotword_correction_worker(
+                    input_validity_guard_worker(
                         raw_text_queue,
+                        valid_text_queue,
+                        performance_logger,
+                    ),
+                    false_trigger_filter_worker(
+                        valid_text_queue,
+                        filtered_text_queue,
+                        performance_logger,
+                    ),
+                    hotword_correction_worker(
+                        filtered_text_queue,
                         corrected_text_queue,
                         normal_hotwords,
                     ),
@@ -330,8 +424,18 @@ async def main() -> None:
                         benchmark_mode=False,
                         trace_session_id=session_id,
                     ),
-                    selected_translation_worker(
+                    input_validity_guard_worker(
                         raw_text_queue,
+                        valid_text_queue,
+                        performance_logger,
+                    ),
+                    false_trigger_filter_worker(
+                        valid_text_queue,
+                        filtered_text_queue,
+                        performance_logger,
+                    ),
+                    selected_translation_worker(
+                        filtered_text_queue,
                         translated_queue,
                         performance_logger,
                     ),
@@ -348,4 +452,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except AudioRoutingError as error:
+        print("[Audio Routing Error]")
+        print(error)

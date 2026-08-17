@@ -1,4 +1,19 @@
+import re
+
 from config import NORMALIZATION_PUNCTUATION
+
+
+MEANINGFUL_CONTENT_PATTERN = re.compile(
+    r"[A-Za-z0-9\u3400-\u4DBF\u4E00-\u9FFF]"
+)
+
+
+def has_meaningful_content(text: str) -> bool:
+    """中文字符、ASCII 英文字母或数字任一存在即视为有效输入。"""
+    return (
+        isinstance(text, str)
+        and MEANINGFUL_CONTENT_PATTERN.search(text) is not None
+    )
 
 
 def normalize_text(text: str) -> str:
@@ -39,4 +54,3 @@ def levenshtein_distance(reference: str, hypothesis: str) -> int:
         previous_row = current_row
 
     return previous_row[-1]
-

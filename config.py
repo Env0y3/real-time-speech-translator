@@ -20,6 +20,17 @@ ENDPOINT_SILENCE_SECONDS = ENDPOINT_BASE_SECONDS
 ASR_PROVIDER = "sensevoice"  # Benchmark 可选："vosk" 或 "sensevoice"
 NORMAL_ASR_PROVIDER = "sensevoice"  # Normal Mode 可选："vosk" 或 "sensevoice"
 NORMAL_HOTWORD_CORRECTION_ENABLED = True
+INPUT_VALIDITY_GUARD_ENABLED = True
+FALSE_TRIGGER_FILTER_ENABLED = True
+# 仅过滤不超过 350 ms 的 filler；优先避免误删自然长度的真实短回答。
+FALSE_TRIGGER_MAX_SPEECH_SECONDS = 0.35
+FALSE_TRIGGER_FILLERS = {
+    "嗯",
+    "啊",
+    "呃",
+    "额",
+    "嗯嗯",
+}
 VOSK_MODEL_NAME = "vosk-model-small-cn-0.22"
 SENSEVOICE_MODEL_NAME = "iic/SenseVoiceSmall"
 BENCHMARK_REPEATS = 3
@@ -85,11 +96,17 @@ ELEVENLABS_SAMPLE_RATE = 24_000
 ELEVENLABS_CHANNELS = 1
 ELEVENLABS_DTYPE = "int16"
 ELEVENLABS_AUDIO_QUEUE_MAXSIZE = 50
+# None 使用系统默认输出；也可填写 sounddevice 设备索引或唯一名称。
+TRANSLATION_OUTPUT_DEVICE = 4
+LOCAL_MONITOR_ENABLED = False
+LOCAL_MONITOR_DEVICE = None
 
 # System Prompt（系统提示词）只定义单一的中译英职责。
 
 TRANSLATION_SYSTEM_PROMPT = (
     "你是一个实时中英翻译器。"
     "请把用户提供的中文准确、自然地翻译成英文。"
-    "只输出英文翻译，不要解释，不要添加额外内容。"
+    "只返回英文翻译，不要解释，不要添加额外内容，不要道歉，"
+    "不要询问用户提供内容，也不要以聊天助手身份回答。"
+    "如果输入没有有效可翻译内容，返回空字符串。"
 )

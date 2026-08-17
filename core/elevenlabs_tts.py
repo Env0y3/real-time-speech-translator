@@ -19,6 +19,15 @@ from config import (
     ELEVENLABS_OUTPUT_FORMAT,
     ELEVENLABS_SAMPLE_RATE,
     ELEVENLABS_VOICE_ID,
+    LOCAL_MONITOR_DEVICE,
+    LOCAL_MONITOR_ENABLED,
+    TRANSLATION_OUTPUT_DEVICE,
+)
+from core.audio_devices import (
+    AudioRoutingError,
+    AudioRoutingPlan,
+    build_audio_routing_plan,
+    format_device,
 )
 from core.performance_logger import PerformanceLogger
 from core.tts import speak_sync, tts_worker
@@ -71,6 +80,15 @@ class SentenceState:
         )
 
 
+@dataclass
+class AudioOutputStreams:
+    """主输出始终存在；Monitor 可在启动或运行失败后独立关闭。"""
+
+    translation: sd.OutputStream
+    monitor: sd.OutputStream | None = None
+    monitor_label: str | None = None
+
+
 def _websocket_url() -> str:
     return (
         "wss://api.elevenlabs.io/v1/text-to-speech/"
@@ -95,10 +113,15 @@ def _decode_audio(audio_base64: str) -> bytes:
         ) from error
 
 
-def _open_output_stream() -> sd.OutputStream:
-    """为整个 Normal Mode 创建唯一的 OutputStream（音频输出流）。"""
+def _open_output_stream(
+    device: int,
+    role: str,
+) -> sd.OutputStream:
+    """按已验证的设备索引创建 Continuous OutputStream。"""
+    output_stream = None
     try:
         output_stream = sd.OutputStream(
+            device=device,
             samplerate=ELEVENLABS_SAMPLE_RATE,
             channels=ELEVENLABS_CHANNELS,
             dtype=ELEVENLABS_DTYPE,
@@ -106,10 +129,44 @@ def _open_output_stream() -> sd.OutputStream:
         output_stream.start()
         return output_stream
     except Exception as error:
+        if output_stream is not None:
+            try:
+                output_stream.close()
+            except Exception:
+                pass
         raise ElevenLabsTTSError(
-            "OutputStream initialization failed: "
+            f"{role} OutputStream initialization failed: "
             f"{type(error).__name__}: {error}"
         ) from error
+
+
+def _open_audio_output_streams(
+    routing_plan: AudioRoutingPlan,
+) -> AudioOutputStreams:
+    """主输出打开失败向上抛出；Monitor 失败只产生 Warning。"""
+    translation_stream = _open_output_stream(
+        routing_plan.translation_device.index,
+        "Translation output",
+    )
+    monitor_stream = None
+    monitor_label = None
+    if routing_plan.monitor_enabled and routing_plan.monitor_device:
+        monitor_label = format_device(routing_plan.monitor_device)
+        try:
+            monitor_stream = _open_output_stream(
+                routing_plan.monitor_device.index,
+                "Local monitor",
+            )
+        except Exception as error:
+            print(
+                "[Audio Routing Warning] Local monitor could not be "
+                f"opened and was disabled: {type(error).__name__}: {error}"
+            )
+    return AudioOutputStreams(
+        translation=translation_stream,
+        monitor=monitor_stream,
+        monitor_label=monitor_label,
+    )
 
 
 async def _close_output_stream(
@@ -123,6 +180,21 @@ async def _close_output_stream(
         await asyncio.to_thread(output_stream.close)
 
 
+async def _close_audio_output_streams(
+    output_streams: AudioOutputStreams,
+) -> None:
+    if output_streams.monitor is not None:
+        try:
+            await _close_output_stream(output_streams.monitor)
+        except Exception as error:
+            print(
+                "[Audio Routing Warning] Local monitor close failed: "
+                f"{type(error).__name__}"
+            )
+        output_streams.monitor = None
+    await _close_output_stream(output_streams.translation)
+
+
 def _write_audio_chunk(
     output_stream: sd.OutputStream,
     audio_samples: np.ndarray,
@@ -130,6 +202,45 @@ def _write_audio_chunk(
     write_started_at = time.perf_counter()
     output_stream.write(audio_samples)
     return write_started_at, time.perf_counter()
+
+
+async def _write_routed_audio_chunk(
+    output_streams: AudioOutputStreams,
+    audio_samples: np.ndarray,
+) -> tuple[float, float]:
+    """同一 PCM Chunk 并行写入两个不同流，主输出结果作为 Trace 基准。"""
+    translation_write = asyncio.to_thread(
+        _write_audio_chunk,
+        output_streams.translation,
+        audio_samples,
+    )
+    if output_streams.monitor is None:
+        return await translation_write
+
+    monitor_stream = output_streams.monitor
+    translation_result, monitor_result = await asyncio.gather(
+        translation_write,
+        asyncio.to_thread(
+            _write_audio_chunk,
+            monitor_stream,
+            audio_samples,
+        ),
+        return_exceptions=True,
+    )
+    if isinstance(monitor_result, Exception):
+        print(
+            "[Audio Routing Warning] Local monitor write failed and was "
+            f"disabled ({output_streams.monitor_label}): "
+            f"{type(monitor_result).__name__}: {monitor_result}"
+        )
+        try:
+            await _close_output_stream(monitor_stream)
+        except Exception:
+            pass
+        output_streams.monitor = None
+    if isinstance(translation_result, Exception):
+        raise translation_result
+    return translation_result
 
 
 def _record_segment(state: SentenceState, item: dict) -> None:
@@ -290,11 +401,11 @@ async def _receive_audio_chunks(
 
 async def _global_playback_worker(
     audio_playback_queue: asyncio.Queue,
-    output_stream: sd.OutputStream,
+    output_streams: AudioOutputStreams,
     sentence_states: dict[int, SentenceState],
     performance_logger: PerformanceLogger | None,
 ) -> None:
-    """Normal Mode 生命周期内唯一的播放 Consumer 和 OutputStream 用户。"""
+    """唯一播放 Consumer；每个 OutputStream 同一时间只有一次 write。"""
     previous_sentence_finished_at = None
     session_log_tasks = []
 
@@ -349,9 +460,8 @@ async def _global_playback_worker(
             ).reshape(-1, ELEVENLABS_CHANNELS)
             try:
                 write_started_at, write_finished_at = (
-                    await asyncio.to_thread(
-                        _write_audio_chunk,
-                        output_stream,
+                    await _write_routed_audio_chunk(
+                        output_streams,
                         audio_samples,
                     )
                 )
@@ -792,9 +902,22 @@ def _print_network_session_summary(state: SentenceState) -> None:
     print(f"TTS Session Total: {total_ms:.0f} ms")
 
 
+def _should_use_local_tts_fallback(
+    state: SentenceState,
+    audio_routing: AudioRoutingPlan,
+) -> bool:
+    """显式设备路由不能被默认扬声器 fallback 绕过。"""
+    return (
+        state.metrics.audio_chunk_count == 0
+        and bool(state.full_text)
+        and audio_routing.translation_uses_default
+    )
+
+
 async def elevenlabs_tts_worker(
     translated_queue: asyncio.Queue,
     performance_logger: PerformanceLogger | None = None,
+    audio_routing: AudioRoutingPlan | None = None,
 ) -> None:
     """按句消费流式翻译；一句复用一个 ElevenLabs WebSocket。"""
     api_key = os.environ.get("ELEVENLABS_API_KEY")
@@ -811,9 +934,25 @@ async def elevenlabs_tts_worker(
         f"maxsize={ELEVENLABS_AUDIO_QUEUE_MAXSIZE}"
     )
 
+    if audio_routing is None:
+        audio_routing = build_audio_routing_plan(
+            TRANSLATION_OUTPUT_DEVICE,
+            LOCAL_MONITOR_ENABLED,
+            LOCAL_MONITOR_DEVICE,
+            ELEVENLABS_SAMPLE_RATE,
+            ELEVENLABS_CHANNELS,
+            ELEVENLABS_DTYPE,
+        )
+
     try:
-        output_stream = _open_output_stream()
+        output_streams = _open_audio_output_streams(audio_routing)
     except Exception as error:
+        if not audio_routing.translation_uses_default:
+            raise AudioRoutingError(
+                "Translation output device "
+                f"{format_device(audio_routing.translation_device)} "
+                f"cannot be opened: {type(error).__name__}: {error}"
+            ) from error
         print(
             "[ElevenLabs Playback Error] 无法初始化全局 OutputStream："
             f"{type(error).__name__}，改用 pyttsx3"
@@ -833,7 +972,7 @@ async def elevenlabs_tts_worker(
     playback_task = asyncio.create_task(
         _global_playback_worker(
             audio_playback_queue,
-            output_stream,
+            output_streams,
             sentence_states,
             performance_logger,
         )
@@ -885,7 +1024,7 @@ async def elevenlabs_tts_worker(
                         f"{type(drain_error).__name__}"
                     )
 
-                if state.metrics.audio_chunk_count == 0 and state.full_text:
+                if _should_use_local_tts_fallback(state, audio_routing):
                     print("[ElevenLabs TTS] 当前句排队回退到 pyttsx3")
                     await audio_playback_queue.put(
                         {
@@ -898,10 +1037,21 @@ async def elevenlabs_tts_worker(
                     )
                 else:
                     state.partial_failure = True
-                    print(
-                        "[ElevenLabs TTS] 已收到部分音频，"
-                        "为避免重复不再整句回退"
-                    )
+                    if (
+                        state.metrics.audio_chunk_count == 0
+                        and not audio_routing.translation_uses_default
+                    ):
+                        print(
+                            "[ElevenLabs TTS] 显式输出设备模式禁止回退到"
+                            "默认扬声器"
+                        )
+                    elif state.metrics.audio_chunk_count == 0:
+                        print("[ElevenLabs TTS] 没有可用于本地回退的文本")
+                    else:
+                        print(
+                            "[ElevenLabs TTS] 已收到部分音频，"
+                            "为避免重复不再整句回退"
+                        )
                     await audio_playback_queue.put(
                         {
                             "type": "sentence_end",
@@ -917,6 +1067,6 @@ async def elevenlabs_tts_worker(
         # None 只在所有句级网络 Session 都结束后关闭全局 Playback Worker。
         await audio_playback_queue.put(None)
         await playback_task
-        await _close_output_stream(output_stream)
+        await _close_audio_output_streams(output_streams)
 
     print("[ElevenLabs TTS] 播放任务结束")

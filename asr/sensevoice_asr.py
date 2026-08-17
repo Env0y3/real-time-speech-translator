@@ -189,6 +189,8 @@ async def sensevoice_asr_worker(
         endpoint_triggered_at: float,
         current_speech_started_at: float | None,
         endpoint_latency_ms: float | None,
+        speech_duration_seconds: float,
+        speech_voice_chunk_count: int,
     ) -> None:
         nonlocal normal_sentence_id
         utterance_audio = np.concatenate(utterance_chunks).astype(
@@ -257,6 +259,8 @@ async def sensevoice_asr_worker(
                     "text": recognized_text,
                     "speech_started_at": current_speech_started_at,
                     "last_voice_at": last_voice_at,
+                    "speech_duration_ms": speech_duration_seconds * 1000,
+                    "voice_chunk_count": speech_voice_chunk_count,
                     "endpoint_triggered_at": endpoint_triggered_at,
                     "speech_end_detected_at": endpoint_triggered_at,
                     "endpoint_wait_ms": (
@@ -283,6 +287,8 @@ async def sensevoice_asr_worker(
                     time.perf_counter(),
                     speech_started_at,
                     None,
+                    voiced_duration_seconds,
+                    voiced_chunk_count,
                 )
 
             await text_queue.put(None)
@@ -461,6 +467,8 @@ async def sensevoice_asr_worker(
                     vad_now,
                     speech_started_at,
                     endpoint_latency_ms,
+                    voiced_duration_seconds,
+                    voiced_chunk_count,
                 )
 
                 # 一句提交后清空缓存，等待下一句话重新进入 speaking。
