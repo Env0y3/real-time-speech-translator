@@ -3,16 +3,21 @@ import re
 import time
 from collections import deque
 from datetime import datetime
+from statistics import median
 
 import numpy as np
 
 from config import (
+    CHUNK_DURATION_SECONDS,
     ENDPOINT_ADAPTIVE_ENABLED,
     ENDPOINT_BASE_SECONDS,
     ENDPOINT_MAX_SECONDS,
+    ENDPOINT_MIN_INTRA_PAUSE_SECONDS,
+    ENDPOINT_MIN_SPEECH_SECONDS,
     ENDPOINT_MIN_SECONDS,
     ENDPOINT_SAFETY_MARGIN_SECONDS,
     ENDPOINT_SMOOTHING_ALPHA,
+    ENDPOINT_SHORT_UTTERANCE_EXTRA_WAIT_SECONDS,
     SENSEVOICE_MODEL_NAME,
     VAD_RMS_THRESHOLD,
 )
@@ -52,10 +57,8 @@ def calculate_adaptive_endpoint_threshold(
     current_threshold: float,
     recent_pause_durations: deque,
 ) -> tuple[float, float, float]:
-    """根据近期句中停顿计算平均值、目标阈值和EMA平滑后的阈值。"""
-    average_pause = sum(recent_pause_durations) / len(
-        recent_pause_durations
-    )
+    """用近期句中停顿中位数、Safety Margin 和 EMA 更新阈值。"""
+    pause_statistic = median(recent_pause_durations)
 
     if len(recent_pause_durations) < 3:
         target_threshold = ENDPOINT_BASE_SECONDS
@@ -65,7 +68,7 @@ def calculate_adaptive_endpoint_threshold(
             ENDPOINT_MAX_SECONDS,
             max(
                 ENDPOINT_MIN_SECONDS,
-                average_pause + ENDPOINT_SAFETY_MARGIN_SECONDS,
+                pause_statistic + ENDPOINT_SAFETY_MARGIN_SECONDS,
             ),
         )
         new_threshold = (
@@ -77,7 +80,43 @@ def calculate_adaptive_endpoint_threshold(
             max(ENDPOINT_MIN_SECONDS, new_threshold),
         )
 
-    return average_pause, target_threshold, new_threshold
+    return pause_statistic, target_threshold, new_threshold
+
+
+def should_record_intra_sentence_pause(
+    pause_duration: float,
+    current_threshold: float,
+) -> bool:
+    """过滤VAD抖动、句尾边缘值和异常长停顿，只保留明确句中停顿。"""
+    return (
+        pause_duration >= ENDPOINT_MIN_INTRA_PAUSE_SECONDS
+        and pause_duration < current_threshold
+        and pause_duration < current_threshold * 0.9
+    )
+
+
+def calculate_effective_endpoint_threshold(
+    current_threshold: float,
+    voiced_duration_seconds: float,
+    resumed_after_recent_endpoint: bool,
+    adaptive_endpoint_enabled: bool,
+) -> tuple[float, bool]:
+    """只对刚发生过Endpoint后的短碎片增加一次保守等待。"""
+    short_utterance_guard = (
+        adaptive_endpoint_enabled
+        and resumed_after_recent_endpoint
+        and voiced_duration_seconds < ENDPOINT_MIN_SPEECH_SECONDS
+    )
+    if not short_utterance_guard:
+        return current_threshold, False
+    return (
+        min(
+            ENDPOINT_MAX_SECONDS,
+            current_threshold
+            + ENDPOINT_SHORT_UTTERANCE_EXTRA_WAIT_SECONDS,
+        ),
+        True,
+    )
 
 
 async def sensevoice_asr_worker(
@@ -113,6 +152,12 @@ async def sensevoice_asr_worker(
     silence_started_at = None
     recent_pause_durations = deque(maxlen=10)
     current_endpoint_threshold = ENDPOINT_BASE_SECONDS
+    voiced_duration_seconds = 0.0
+    voiced_chunk_count = 0
+    last_endpoint_time = None
+    resumed_after_recent_endpoint = False
+    time_since_last_endpoint = None
+    endpoint_evaluation_logged = False
     adaptive_endpoint_enabled = (
         ENDPOINT_ADAPTIVE_ENABLED and not benchmark_mode
     )
@@ -128,6 +173,12 @@ async def sensevoice_asr_worker(
         print(
             "Current Endpoint Threshold: "
             f"{current_endpoint_threshold * 1000:.0f} ms"
+        )
+        print(
+            "Short Utterance Guard: speech < "
+            f"{ENDPOINT_MIN_SPEECH_SECONDS * 1000:.0f} ms, "
+            "extra wait "
+            f"{ENDPOINT_SHORT_UTTERANCE_EXTRA_WAIT_SECONDS * 1000:.0f} ms"
         )
 
     async def recognize_and_publish(
@@ -194,30 +245,49 @@ async def sensevoice_asr_worker(
             print("SenseVoice ASR Worker 已结束")
             break
 
-        audio_chunk, _chunk_created_at, chunk_clock_time = queue_item
+        audio_chunk, chunk_created_at, chunk_clock_time = queue_item
         rms = float(np.sqrt(np.mean(audio_chunk**2))) * 1000
         print(
             f"[Audio {chunk_clock_time}] Chunk: {audio_chunk.size} samples "
             f"| RMS: {rms:.1f}"
         )
 
-        vad_now = time.perf_counter()
+        # 使用 Audio Worker 记录的采集时间，避免 ASR 推理期间 Queue 积压后，
+        # 用处理时间误算 Silence（静音）和句间恢复间隔。
+        vad_now = chunk_created_at
         if rms > VAD_RMS_THRESHOLD:
             if not is_speaking:
                 utterance_chunks = []
                 silence_started_at = None
+                voiced_duration_seconds = 0.0
+                voiced_chunk_count = 0
+                endpoint_evaluation_logged = False
+                time_since_last_endpoint = (
+                    vad_now - last_endpoint_time
+                    if last_endpoint_time is not None
+                    else None
+                )
+                # 刚刚发生过 Endpoint 又快速恢复语音，下一段短音频更像误切碎片。
+                resumed_after_recent_endpoint = (
+                    adaptive_endpoint_enabled
+                    and time_since_last_endpoint is not None
+                    and time_since_last_endpoint <= ENDPOINT_MAX_SECONDS
+                )
             elif silence_started_at is not None:
                 pause_duration = vad_now - silence_started_at
 
                 # 只有 voice → silence → voice 且尚未达到句尾阈值，
-                # 才属于 Intra-sentence Pause（句中停顿）。
+                # 且不属于极短VAD抖动或接近句尾的边缘值，才记录为句中停顿。
                 if (
                     adaptive_endpoint_enabled
-                    and pause_duration < current_endpoint_threshold
+                    and should_record_intra_sentence_pause(
+                        pause_duration,
+                        current_endpoint_threshold,
+                    )
                 ):
                     recent_pause_durations.append(pause_duration)
                     (
-                        average_pause,
+                        pause_statistic,
                         target_threshold,
                         current_endpoint_threshold,
                     ) = calculate_adaptive_endpoint_threshold(
@@ -230,8 +300,8 @@ async def sensevoice_asr_worker(
                         f"{pause_duration * 1000:.0f} ms"
                     )
                     print(
-                        "Recent Average Pause: "
-                        f"{average_pause * 1000:.0f} ms"
+                        "Recent Median Pause: "
+                        f"{pause_statistic * 1000:.0f} ms"
                     )
                     print(
                         "Target Threshold: "
@@ -243,8 +313,11 @@ async def sensevoice_asr_worker(
                     )
 
                 silence_started_at = None
+                endpoint_evaluation_logged = False
             is_speaking = True
             last_voice_time = vad_now
+            voiced_duration_seconds += CHUNK_DURATION_SECONDS
+            voiced_chunk_count += 1
             utterance_chunks.append(audio_chunk)
         elif is_speaking and last_voice_time is not None:
             utterance_chunks.append(audio_chunk)
@@ -252,18 +325,91 @@ async def sensevoice_asr_worker(
                 # 最后一次检测到语音的时间近似表示静音开始时间。
                 silence_started_at = last_voice_time
             silence_seconds = vad_now - last_voice_time
+            (
+                effective_endpoint_threshold,
+                short_utterance_guard,
+            ) = calculate_effective_endpoint_threshold(
+                current_endpoint_threshold,
+                voiced_duration_seconds,
+                resumed_after_recent_endpoint,
+                adaptive_endpoint_enabled,
+            )
 
-            if silence_seconds >= current_endpoint_threshold:
+            if (
+                not benchmark_mode
+                and silence_seconds >= current_endpoint_threshold
+                and not endpoint_evaluation_logged
+            ):
+                pause_statistic = (
+                    median(recent_pause_durations)
+                    if recent_pause_durations
+                    else None
+                )
+                print("[Adaptive Endpoint]")
+                print(
+                    "Speech Duration: "
+                    f"{voiced_duration_seconds * 1000:.0f} ms "
+                    f"({voiced_chunk_count} voiced chunks)"
+                )
+                print(f"Silence: {silence_seconds * 1000:.0f} ms")
+                print(
+                    "Base Threshold: "
+                    f"{ENDPOINT_BASE_SECONDS * 1000:.0f} ms"
+                )
+                print(
+                    "Adaptive Threshold: "
+                    f"{current_endpoint_threshold * 1000:.0f} ms"
+                )
+                print(
+                    "Effective Threshold: "
+                    f"{effective_endpoint_threshold * 1000:.0f} ms"
+                )
+                print(
+                    "Short Utterance Guard: "
+                    f"{'ON' if short_utterance_guard else 'OFF'}"
+                )
+                print(f"Pause Sample Count: {len(recent_pause_durations)}")
+                print(
+                    "Pause Statistic (median): "
+                    + (
+                        f"{pause_statistic * 1000:.0f} ms"
+                        if pause_statistic is not None
+                        else "N/A"
+                    )
+                )
+                print(
+                    "Time Since Last Endpoint: "
+                    + (
+                        f"{time_since_last_endpoint * 1000:.0f} ms"
+                        if time_since_last_endpoint is not None
+                        else "N/A"
+                    )
+                )
+                endpoint_evaluation_logged = True
+
+            if silence_seconds >= effective_endpoint_threshold:
                 speech_end_time = last_voice_time
                 endpoint_latency_ms = (
                     vad_now - speech_end_time
                 ) * 1000
-                print(
-                    "[VAD] Speech End detected "
-                    f"| silence: {endpoint_latency_ms:.0f} ms "
-                    f"| threshold: "
-                    f"{current_endpoint_threshold * 1000:.0f} ms"
+                endpoint_reason = (
+                    "short_utterance_confirmed"
+                    if short_utterance_guard
+                    else "normal_endpoint"
                 )
+                print("[Speech End]")
+                print(
+                    "speech_duration_ms = "
+                    f"{voiced_duration_seconds * 1000:.0f}"
+                )
+                print(f"silence_ms = {endpoint_latency_ms:.0f}")
+                print(
+                    "effective_threshold_ms = "
+                    f"{effective_endpoint_threshold * 1000:.0f}"
+                )
+                print(f"reason = {endpoint_reason}")
+
+                last_endpoint_time = vad_now
 
                 await recognize_and_publish(
                     speech_end_time,
@@ -275,3 +421,8 @@ async def sensevoice_asr_worker(
                 last_voice_time = None
                 utterance_chunks = []
                 silence_started_at = None
+                voiced_duration_seconds = 0.0
+                voiced_chunk_count = 0
+                resumed_after_recent_endpoint = False
+                time_since_last_endpoint = None
+                endpoint_evaluation_logged = False

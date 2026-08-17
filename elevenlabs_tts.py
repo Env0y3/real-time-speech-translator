@@ -12,6 +12,7 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 
 from config import (
+    ELEVENLABS_AUDIO_QUEUE_MAXSIZE,
     ELEVENLABS_CHANNELS,
     ELEVENLABS_DTYPE,
     ELEVENLABS_MODEL_ID,
@@ -20,10 +21,9 @@ from config import (
     ELEVENLABS_VOICE_ID,
 )
 from performance_logger import PerformanceLogger
-from tts import speak_sync
+from tts import speak_sync, tts_worker
 
 
-AUDIO_QUEUE_MAXSIZE = 20
 TTS_SESSION_TIMEOUT_SECONDS = 60
 
 
@@ -40,8 +40,13 @@ class SentenceMetrics:
     first_audio_chunk_at: float | None = None
     first_playback_at: float | None = None
     session_finished_at: float | None = None
+    playback_finished_at: float | None = None
+    last_audio_write_finished_at: float | None = None
+    tts_queue_wait_ms: float | None = None
+    cross_sentence_gap_ms: float | None = None
     audio_chunk_count: int = 0
     total_audio_bytes: int = 0
+    playback_error: bool = False
 
 
 @dataclass
@@ -53,6 +58,8 @@ class SentenceState:
     segments: dict[int, str] = field(default_factory=dict)
     sentence_end_received: bool = False
     pipeline_finished: bool = False
+    partial_failure: bool = False
+    fallback_provider: str | None = None
 
     @property
     def full_text(self) -> str:
@@ -88,7 +95,7 @@ def _decode_audio(audio_base64: str) -> bytes:
 
 
 def _open_output_stream() -> sd.OutputStream:
-    """每个句级 Session 只创建一个 OutputStream（音频输出流）。"""
+    """为整个 Normal Mode 创建唯一的 OutputStream（音频输出流）。"""
     try:
         output_stream = sd.OutputStream(
             samplerate=ELEVENLABS_SAMPLE_RATE,
@@ -118,10 +125,10 @@ async def _close_output_stream(
 def _write_audio_chunk(
     output_stream: sd.OutputStream,
     audio_samples: np.ndarray,
-) -> float:
+) -> tuple[float, float]:
     write_started_at = time.perf_counter()
     output_stream.write(audio_samples)
-    return write_started_at
+    return write_started_at, time.perf_counter()
 
 
 def _record_segment(state: SentenceState, item: dict) -> None:
@@ -206,10 +213,12 @@ async def _send_sentence_segments(
 
 async def _receive_audio_chunks(
     websocket,
-    audio_queue: asyncio.Queue,
-    metrics: SentenceMetrics,
+    audio_playback_queue: asyncio.Queue,
+    state: SentenceState,
+    runtime_session_id: str | None,
 ) -> None:
-    """网络 Producer（生产者）：持续接收 PCM 并放入有界音频队列。"""
+    """网络 Producer（生产者）：接收 PCM 后立即交给全局播放队列。"""
+    metrics = state.metrics
     received_final = False
     try:
         async for raw_message in websocket:
@@ -229,16 +238,29 @@ async def _receive_audio_chunks(
                 audio_chunk = _decode_audio(audio_base64)
                 if audio_chunk:
                     received_at = time.perf_counter()
-                    if metrics.first_audio_chunk_at is None:
+                    is_first_chunk = metrics.first_audio_chunk_at is None
+                    if is_first_chunk:
                         metrics.first_audio_chunk_at = received_at
-                        first_audio_ms = (
+                        network_first_audio_ms = (
                             received_at - metrics.first_segment_ready_at
                         ) * 1000
-                        print(f"First Audio Chunk: {first_audio_ms:.0f} ms")
+                        print(
+                            "Network First Audio: "
+                            f"{network_first_audio_ms:.0f} ms"
+                        )
                     metrics.audio_chunk_count += 1
                     metrics.total_audio_bytes += len(audio_chunk)
-                    # Queue 满时 await 自然形成 Backpressure（背压），不丢音频。
-                    await audio_queue.put(audio_chunk)
+                    # Queue 满时自然产生 Backpressure（背压），不丢 Chunk。
+                    await audio_playback_queue.put(
+                        {
+                            "type": "audio",
+                            "session_id": runtime_session_id,
+                            "sentence_id": state.sentence_id,
+                            "audio_chunk": audio_chunk,
+                            "audio_received_at": received_at,
+                            "is_first_chunk": is_first_chunk,
+                        }
+                    )
 
             if response.get("is_final") or response.get("isFinal"):
                 metrics.session_finished_at = time.perf_counter()
@@ -250,68 +272,134 @@ async def _receive_audio_chunks(
                 "WebSocket closed before is_final "
                 f"(code={error.code}, reason={error.reason})"
             ) from error
-    finally:
-        current_task = asyncio.current_task()
-        if current_task is None or not current_task.cancelling():
-            await audio_queue.put(None)
-
     if metrics.audio_chunk_count == 0:
         raise ElevenLabsTTSError("ElevenLabs returned empty audio")
     if not received_final:
         raise ElevenLabsTTSError("Session ended without is_final")
 
-
-async def _playback_worker(
-    audio_queue: asyncio.Queue,
+async def _global_playback_worker(
+    audio_playback_queue: asyncio.Queue,
     output_stream: sd.OutputStream,
-    metrics: SentenceMetrics,
+    sentence_states: dict[int, SentenceState],
+    performance_logger: PerformanceLogger | None,
 ) -> None:
-    """单一 Consumer（消费者）顺序写同一个 OutputStream。"""
+    """Normal Mode 生命周期内唯一的播放 Consumer 和 OutputStream 用户。"""
+    previous_sentence_finished_at = None
+
     while True:
-        audio_chunk = await audio_queue.get()
-        if audio_chunk is None:
+        message = await audio_playback_queue.get()
+        if message is None:
             return
-        if len(audio_chunk) % np.dtype(np.int16).itemsize != 0:
-            raise ElevenLabsTTSError("PCM Chunk 不是完整的 int16 数据")
-
-        audio_samples = np.frombuffer(
-            audio_chunk,
-            dtype="<i2",
-        ).reshape(-1, ELEVENLABS_CHANNELS)
-        try:
-            write_started_at = await asyncio.to_thread(
-                _write_audio_chunk,
-                output_stream,
-                audio_samples,
+        sentence_id = message["sentence_id"]
+        state = sentence_states.get(sentence_id)
+        if state is None:
+            print(
+                "[ElevenLabs Playback Warning] "
+                f"找不到 Sentence ID {sentence_id}"
             )
-        except Exception as error:
-            raise ElevenLabsTTSError(
-                "OutputStream.write failed: "
-                f"{type(error).__name__}: {error}"
-            ) from error
+            continue
+        metrics = state.metrics
 
-        if metrics.first_playback_at is None:
-            # 这是首次调用 write() 的近似值，不冒充扬声器硬件首帧时间。
-            metrics.first_playback_at = write_started_at
-            first_playback_ms = (
-                write_started_at - metrics.first_segment_ready_at
-            ) * 1000
-            print(f"First Playback: {first_playback_ms:.0f} ms")
+        if message["type"] == "audio":
+            if metrics.playback_error:
+                continue
+            audio_chunk = message["audio_chunk"]
+            if len(audio_chunk) % np.dtype(np.int16).itemsize != 0:
+                metrics.playback_error = True
+                print("[ElevenLabs Playback Error] PCM Chunk 不完整")
+                continue
+
+            audio_samples = np.frombuffer(
+                audio_chunk,
+                dtype="<i2",
+            ).reshape(-1, ELEVENLABS_CHANNELS)
+            try:
+                write_started_at, write_finished_at = (
+                    await asyncio.to_thread(
+                        _write_audio_chunk,
+                        output_stream,
+                        audio_samples,
+                    )
+                )
+            except Exception as error:
+                metrics.playback_error = True
+                print(
+                    "[ElevenLabs Playback Error] "
+                    f"{type(error).__name__}: {error}"
+                )
+                continue
+
+            metrics.last_audio_write_finished_at = write_finished_at
+            if metrics.first_playback_at is None:
+                # write() 开始时间是软件层近似值，不冒充硬件首帧时间。
+                metrics.first_playback_at = write_started_at
+                metrics.tts_queue_wait_ms = (
+                    write_started_at - message["audio_received_at"]
+                ) * 1000
+                if previous_sentence_finished_at is not None:
+                    metrics.cross_sentence_gap_ms = (
+                        write_started_at - previous_sentence_finished_at
+                    ) * 1000
+                first_playback_ms = (
+                    write_started_at - metrics.first_segment_ready_at
+                ) * 1000
+                print(f"First Playback: {first_playback_ms:.0f} ms")
+                print(
+                    "TTS Queue Wait: "
+                    f"{metrics.tts_queue_wait_ms:.0f} ms"
+                )
+
+        elif message["type"] == "pyttsx3_fallback":
+            state.fallback_provider = "pyttsx3"
+            fallback_started_at = time.perf_counter()
+            if previous_sentence_finished_at is not None:
+                metrics.cross_sentence_gap_ms = (
+                    fallback_started_at - previous_sentence_finished_at
+                ) * 1000
+            try:
+                first_audio_started_at = await asyncio.to_thread(
+                    speak_sync,
+                    message["text"],
+                )
+                metrics.first_playback_at = (
+                    first_audio_started_at or fallback_started_at
+                )
+            except Exception as error:
+                state.fallback_provider = "pyttsx3_failed"
+                metrics.playback_error = True
+                state.partial_failure = True
+                print(
+                    "[TTS Fallback Error] "
+                    f"{type(error).__name__}"
+                )
+            metrics.playback_finished_at = time.perf_counter()
+            previous_sentence_finished_at = metrics.playback_finished_at
+            await _print_and_log_session(performance_logger, state)
+            sentence_states.pop(sentence_id, None)
+
+        elif message["type"] == "sentence_end":
+            metrics.playback_finished_at = (
+                metrics.last_audio_write_finished_at or time.perf_counter()
+            )
+            if metrics.first_playback_at is not None:
+                previous_sentence_finished_at = metrics.playback_finished_at
+            if metrics.playback_error:
+                state.partial_failure = True
+            await _print_and_log_session(performance_logger, state)
+            sentence_states.pop(sentence_id, None)
 
 
 async def _run_sentence_session(
     translated_queue: asyncio.Queue,
+    audio_playback_queue: asyncio.Queue,
     first_item: dict,
     state: SentenceState,
     api_key: str,
+    runtime_session_id: str | None,
 ) -> None:
-    """为一句中文创建一个 WebSocket，并并发发送文字、接收和播放音频。"""
-    output_stream = None
+    """一句使用一个 WebSocket；这里只生成音频，不等待扬声器播放。"""
     tasks = []
     try:
-        output_stream = _open_output_stream()
-        audio_queue = asyncio.Queue(maxsize=AUDIO_QUEUE_MAXSIZE)
-
         async with websockets.connect(
             _websocket_url(),
             open_timeout=10,
@@ -332,26 +420,28 @@ async def _run_sentence_session(
                 asyncio.create_task(
                     _receive_audio_chunks(
                         websocket,
-                        audio_queue,
-                        state.metrics,
-                    )
-                ),
-                asyncio.create_task(
-                    _playback_worker(
-                        audio_queue,
-                        output_stream,
-                        state.metrics,
+                        audio_playback_queue,
+                        state,
+                        runtime_session_id,
                     )
                 ),
             ]
             await asyncio.gather(*tasks)
+            # 两个任务都成功后再放 Sentence End Marker（句尾标记）。
+            # None 仍只用于整个 Playback Worker 的 shutdown。
+            await audio_playback_queue.put(
+                {
+                    "type": "sentence_end",
+                    "session_id": runtime_session_id,
+                    "sentence_id": state.sentence_id,
+                }
+            )
     finally:
         for task in tasks:
             if not task.done():
                 task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        await _close_output_stream(output_stream)
 
 
 async def _drain_failed_sentence(
@@ -377,20 +467,18 @@ async def _drain_failed_sentence(
             return
 
 
-async def _log_session(
+async def _print_and_log_session(
     performance_logger: PerformanceLogger | None,
     state: SentenceState,
-    partial_failure: bool,
-    fallback_provider: str | None = None,
 ) -> None:
-    if performance_logger is None:
-        return
+    """在本地播放结束后统一打印并记录网络与播放两组指标。"""
     metrics = state.metrics
-    first_audio_chunk_ms = None
+    network_first_audio_ms = None
     first_playback_ms = None
     tts_session_total_ms = None
+    sentence_playback_ms = None
     if metrics.first_audio_chunk_at is not None:
-        first_audio_chunk_ms = (
+        network_first_audio_ms = (
             metrics.first_audio_chunk_at - metrics.first_segment_ready_at
         ) * 1000
     if metrics.first_playback_at is not None:
@@ -404,25 +492,65 @@ async def _log_session(
         tts_session_total_ms = (
             metrics.session_finished_at - metrics.first_text_sent_at
         ) * 1000
+    if (
+        metrics.first_playback_at is not None
+        and metrics.playback_finished_at is not None
+    ):
+        sentence_playback_ms = (
+            metrics.playback_finished_at - metrics.first_playback_at
+        ) * 1000
+
+    print(f"Audio Chunk Count: {metrics.audio_chunk_count}")
+    print(f"Total Audio Bytes: {metrics.total_audio_bytes}")
+    print(
+        "Network First Audio: "
+        f"{network_first_audio_ms:.0f} ms"
+        if network_first_audio_ms is not None
+        else "Network First Audio: N/A"
+    )
+    print(
+        f"TTS Queue Wait: {metrics.tts_queue_wait_ms:.0f} ms"
+        if metrics.tts_queue_wait_ms is not None
+        else "TTS Queue Wait: N/A"
+    )
+    print(
+        f"Sentence Playback: {sentence_playback_ms:.0f} ms"
+        if sentence_playback_ms is not None
+        else "Sentence Playback: N/A"
+    )
+    print(
+        f"Cross-Sentence Gap: {metrics.cross_sentence_gap_ms:.0f} ms"
+        if metrics.cross_sentence_gap_ms is not None
+        else "Cross-Sentence Gap: N/A"
+    )
+
+    if performance_logger is None:
+        return
 
     await performance_logger.log(
         {
             "event": "tts_session",
             "tts_provider": "elevenlabs",
-            "fallback_provider": fallback_provider,
+            "fallback_provider": state.fallback_provider,
             "sentence_id": state.sentence_id,
             "segment_count": len(state.segments),
-            "first_audio_chunk_ms": first_audio_chunk_ms,
+            # 保留 V11.1 字段，并新增语义更清晰的同值字段。
+            "first_audio_chunk_ms": network_first_audio_ms,
+            "network_first_audio_ms": network_first_audio_ms,
+            "tts_queue_wait_ms": metrics.tts_queue_wait_ms,
             "first_playback_ms": first_playback_ms,
             "tts_session_total_ms": tts_session_total_ms,
+            "sentence_playback_ms": sentence_playback_ms,
+            "cross_sentence_gap_ms": metrics.cross_sentence_gap_ms,
             "audio_chunk_count": metrics.audio_chunk_count,
             "total_audio_bytes": metrics.total_audio_bytes,
-            "partial_failure": partial_failure,
+            "partial_failure": state.partial_failure,
         }
     )
 
 
-def _print_session_summary(state: SentenceState) -> None:
+def _print_network_session_summary(state: SentenceState) -> None:
+    """WebSocket 完成时只打印服务器会话指标，不冒充播放完成。"""
     metrics = state.metrics
     if (
         metrics.first_text_sent_at is None
@@ -432,8 +560,6 @@ def _print_session_summary(state: SentenceState) -> None:
     total_ms = (
         metrics.session_finished_at - metrics.first_text_sent_at
     ) * 1000
-    print(f"Audio Chunk Count: {metrics.audio_chunk_count}")
-    print(f"Total Audio Bytes: {metrics.total_audio_bytes}")
     print(f"TTS Session Total: {total_ms:.0f} ms")
 
 
@@ -451,78 +577,114 @@ async def elevenlabs_tts_worker(
     print(f"Voice: {ELEVENLABS_VOICE_ID}")
     print(f"Model: {ELEVENLABS_MODEL_ID}")
     print(f"Output: {ELEVENLABS_OUTPUT_FORMAT}")
+    print(
+        "Global Audio Queue: "
+        f"maxsize={ELEVENLABS_AUDIO_QUEUE_MAXSIZE}"
+    )
 
-    while True:
-        first_item = await translated_queue.get()
-        if first_item is None:
-            print("[ElevenLabs TTS] 播放任务结束")
-            return
-        if not isinstance(first_item, dict):
-            print("[ElevenLabs TTS Error] 收到旧版 Queue 数据，跳过")
-            continue
-        if first_item.get("event") == "sentence_end":
-            continue
-
-        sentence_id = first_item["sentence_id"]
-        metrics = SentenceMetrics(
-            first_segment_ready_at=first_item["segment_ready_at"]
+    try:
+        output_stream = _open_output_stream()
+    except Exception as error:
+        print(
+            "[ElevenLabs Playback Error] 无法初始化全局 OutputStream："
+            f"{type(error).__name__}，改用 pyttsx3"
         )
-        state = SentenceState(sentence_id=sentence_id, metrics=metrics)
-        _record_segment(state, first_item)
-        print("\n[ElevenLabs TTS]")
-        print(f"Sentence ID: {sentence_id}")
+        await tts_worker(translated_queue, performance_logger)
+        return
 
-        try:
-            async with asyncio.timeout(TTS_SESSION_TIMEOUT_SECONDS):
-                await _run_sentence_session(
-                    translated_queue,
-                    first_item,
-                    state,
-                    api_key,
-                )
-            _print_session_summary(state)
-            await _log_session(performance_logger, state, False)
-        except Exception as error:
-            print(
-                "[ElevenLabs TTS Error] "
-                f"{_safe_error_message(error, api_key)}"
+    runtime_session_id = (
+        performance_logger.session_id
+        if performance_logger is not None
+        else None
+    )
+    audio_playback_queue = asyncio.Queue(
+        maxsize=ELEVENLABS_AUDIO_QUEUE_MAXSIZE
+    )
+    sentence_states: dict[int, SentenceState] = {}
+    playback_task = asyncio.create_task(
+        _global_playback_worker(
+            audio_playback_queue,
+            output_stream,
+            sentence_states,
+            performance_logger,
+        )
+    )
+
+    try:
+        while True:
+            first_item = await translated_queue.get()
+            if first_item is None:
+                break
+            if not isinstance(first_item, dict):
+                print("[ElevenLabs TTS Error] 收到旧版 Queue 数据，跳过")
+                continue
+            if first_item.get("event") == "sentence_end":
+                continue
+
+            sentence_id = first_item["sentence_id"]
+            metrics = SentenceMetrics(
+                first_segment_ready_at=first_item["segment_ready_at"]
             )
+            state = SentenceState(sentence_id=sentence_id, metrics=metrics)
+            sentence_states[sentence_id] = state
+            _record_segment(state, first_item)
+            print("\n[ElevenLabs TTS]")
+            print(f"Sentence ID: {sentence_id}")
+
             try:
-                await _drain_failed_sentence(translated_queue, state)
-            except Exception as drain_error:
+                async with asyncio.timeout(TTS_SESSION_TIMEOUT_SECONDS):
+                    await _run_sentence_session(
+                        translated_queue,
+                        audio_playback_queue,
+                        first_item,
+                        state,
+                        api_key,
+                        runtime_session_id,
+                    )
+                _print_network_session_summary(state)
+            except Exception as error:
                 print(
-                    "[ElevenLabs TTS Error] Queue 清理失败："
-                    f"{type(drain_error).__name__}"
+                    "[ElevenLabs TTS Error] "
+                    f"{_safe_error_message(error, api_key)}"
                 )
-
-            if state.metrics.first_playback_at is None and state.full_text:
-                print("[ElevenLabs TTS] 当前句回退到 pyttsx3")
                 try:
-                    await asyncio.to_thread(speak_sync, state.full_text)
-                    await _log_session(
-                        performance_logger,
-                        state,
-                        False,
-                        fallback_provider="pyttsx3",
-                    )
-                except Exception as fallback_error:
+                    await _drain_failed_sentence(translated_queue, state)
+                except Exception as drain_error:
                     print(
-                        "[TTS Fallback Error] "
-                        f"{type(fallback_error).__name__}"
+                        "[ElevenLabs TTS Error] Queue 清理失败："
+                        f"{type(drain_error).__name__}"
                     )
-                    await _log_session(
-                        performance_logger,
-                        state,
-                        False,
-                        fallback_provider="pyttsx3_failed",
-                    )
-            else:
-                print(
-                    "[ElevenLabs TTS] 已播放部分音频，"
-                    "为避免重复不再整句回退"
-                )
-                await _log_session(performance_logger, state, True)
 
-        if state.pipeline_finished:
-            print("[ElevenLabs TTS] 播放任务结束")
-            return
+                if state.metrics.audio_chunk_count == 0 and state.full_text:
+                    print("[ElevenLabs TTS] 当前句排队回退到 pyttsx3")
+                    await audio_playback_queue.put(
+                        {
+                            "type": "pyttsx3_fallback",
+                            "session_id": runtime_session_id,
+                            "sentence_id": sentence_id,
+                            "text": state.full_text,
+                        }
+                    )
+                else:
+                    state.partial_failure = True
+                    print(
+                        "[ElevenLabs TTS] 已收到部分音频，"
+                        "为避免重复不再整句回退"
+                    )
+                    await audio_playback_queue.put(
+                        {
+                            "type": "sentence_end",
+                            "session_id": runtime_session_id,
+                            "sentence_id": sentence_id,
+                        }
+                    )
+
+            if state.pipeline_finished:
+                break
+    finally:
+        # None 只在所有句级网络 Session 都结束后关闭全局 Playback Worker。
+        await audio_playback_queue.put(None)
+        await playback_task
+        await _close_output_stream(output_stream)
+
+    print("[ElevenLabs TTS] 播放任务结束")

@@ -9,6 +9,7 @@ from audio import audio_worker, wait_for_stop
 from benchmark import benchmark_worker
 from config import (
     ASR_PROVIDER,
+    ELEVENLABS_AUDIO_QUEUE_MAXSIZE,
     ELEVENLABS_MODEL_ID,
     ELEVENLABS_OUTPUT_FORMAT,
     ELEVENLABS_VOICE_ID,
@@ -223,6 +224,11 @@ async def main() -> None:
                     STREAMING_TRANSLATION_ENABLED
                 ),
                 "tts_provider": TTS_PROVIDER,
+                "audio_playback_queue_maxsize": (
+                    ELEVENLABS_AUDIO_QUEUE_MAXSIZE
+                    if TTS_PROVIDER == "elevenlabs"
+                    else None
+                ),
                 "translation_min_chars": (
                     STREAMING_TRANSLATION_MIN_CHARS
                 ),
