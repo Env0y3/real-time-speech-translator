@@ -55,12 +55,22 @@ async def tts_worker(
             print("[TTS] 播放任务结束")
             break
 
-        (
-            english_text,
-            segment_ready_at,
-            sentence_id,
-            segment_index,
-        ) = queue_item
+        if isinstance(queue_item, dict):
+            if queue_item.get("event") == "sentence_end":
+                # pyttsx3 每个语块独立播放，不需要处理整句结束控制消息。
+                continue
+            english_text = queue_item["text"]
+            segment_ready_at = queue_item["segment_ready_at"]
+            sentence_id = queue_item["sentence_id"]
+            segment_index = queue_item["segment_index"]
+        else:
+            # 保留对 V10 旧四元组的兼容，便于切回旧代码或做局部测试。
+            (
+                english_text,
+                segment_ready_at,
+                sentence_id,
+                segment_index,
+            ) = queue_item
         processing_started_at = time.perf_counter()
         queue_wait_ms = (
             processing_started_at - segment_ready_at
@@ -118,6 +128,7 @@ async def tts_worker(
             await performance_logger.log(
                 {
                     "event": "tts_segment",
+                    "tts_provider": "pyttsx3",
                     "sentence_id": sentence_id,
                     "segment_index": segment_index,
                     "text": english_text,

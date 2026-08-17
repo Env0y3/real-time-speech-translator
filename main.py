@@ -9,6 +9,9 @@ from audio import audio_worker, wait_for_stop
 from benchmark import benchmark_worker
 from config import (
     ASR_PROVIDER,
+    ELEVENLABS_MODEL_ID,
+    ELEVENLABS_OUTPUT_FORMAT,
+    ELEVENLABS_VOICE_ID,
     HOTWORDS_PATH,
     HOTWORD_TEST_SENTENCES,
     MODEL_PATH,
@@ -21,8 +24,10 @@ from config import (
     STREAMING_TRANSLATION_MIN_CHARS,
     STREAMING_TRANSLATION_TARGET_CHARS,
     TEST_SENTENCES,
+    TTS_PROVIDER,
     VOSK_MODEL_NAME,
 )
+from elevenlabs_tts import elevenlabs_tts_worker
 from hotwords import hotword_correction_worker, load_hotwords
 from performance_logger import PerformanceLogger, create_session_id
 from translation import streaming_translation_worker, translation_worker
@@ -149,6 +154,18 @@ async def main() -> None:
         print("缺少 DEEPSEEK_API_KEY")
         return
 
+    if run_mode == "1" and TTS_PROVIDER not in {"pyttsx3", "elevenlabs"}:
+        print('TTS_PROVIDER 只支持 "pyttsx3" 或 "elevenlabs"')
+        return
+
+    if (
+        run_mode == "1"
+        and TTS_PROVIDER == "elevenlabs"
+        and not os.environ.get("ELEVENLABS_API_KEY")
+    ):
+        print("缺少 ELEVENLABS_API_KEY")
+        return
+
     SetLogLevel(-1)
 
     audio_queue = asyncio.Queue(maxsize=5)
@@ -205,7 +222,7 @@ async def main() -> None:
                 "streaming_translation_enabled": (
                     STREAMING_TRANSLATION_ENABLED
                 ),
-                "tts_provider": "pyttsx3",
+                "tts_provider": TTS_PROVIDER,
                 "translation_min_chars": (
                     STREAMING_TRANSLATION_MIN_CHARS
                 ),
@@ -229,10 +246,20 @@ async def main() -> None:
             if STREAMING_TRANSLATION_ENABLED
             else translation_worker
         )
+        selected_tts_worker = (
+            elevenlabs_tts_worker
+            if TTS_PROVIDER == "elevenlabs"
+            else tts_worker
+        )
         print(
             "Streaming Translation: "
             f"{'ON' if STREAMING_TRANSLATION_ENABLED else 'OFF'}"
         )
+        print(f"TTS Provider: {TTS_PROVIDER}")
+        if TTS_PROVIDER == "elevenlabs":
+            print(f"Voice: {ELEVENLABS_VOICE_ID}")
+            print(f"Model: {ELEVENLABS_MODEL_ID}")
+            print(f"Output: {ELEVENLABS_OUTPUT_FORMAT}")
 
         if NORMAL_ASR_PROVIDER == "vosk":
             print("Normal ASR: Vosk")
@@ -246,7 +273,7 @@ async def main() -> None:
                     translated_queue,
                     performance_logger,
                 ),
-                tts_worker(translated_queue, performance_logger),
+                selected_tts_worker(translated_queue, performance_logger),
                 wait_for_stop(stop_event, microphone_ready),
             )
         else:
@@ -280,7 +307,10 @@ async def main() -> None:
                         translated_queue,
                         performance_logger,
                     ),
-                    tts_worker(translated_queue, performance_logger),
+                    selected_tts_worker(
+                        translated_queue,
+                        performance_logger,
+                    ),
                     wait_for_stop(stop_event, microphone_ready),
                 )
             else:
@@ -297,7 +327,10 @@ async def main() -> None:
                         translated_queue,
                         performance_logger,
                     ),
-                    tts_worker(translated_queue, performance_logger),
+                    selected_tts_worker(
+                        translated_queue,
+                        performance_logger,
+                    ),
                     wait_for_stop(stop_event, microphone_ready),
                 )
 

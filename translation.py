@@ -26,6 +26,40 @@ from performance_logger import PerformanceLogger
 TRANSLATION_BOUNDARY_PUNCTUATION = ",.!?;:"
 
 
+def _translation_segment_message(
+    text: str,
+    segment_ready_at: float,
+    sentence_id: int,
+    segment_index: int,
+) -> dict:
+    """构造 Translation → TTS 的语块消息。"""
+    return {
+        "event": "segment",
+        "sentence_id": sentence_id,
+        "segment_index": segment_index,
+        "text": text,
+        "segment_ready_at": segment_ready_at,
+        "is_final_segment": False,
+    }
+
+
+async def _publish_sentence_end(
+    translated_queue: asyncio.Queue,
+    sentence_id: int,
+    full_translation: str,
+    segment_count: int,
+) -> None:
+    """通知 TTS：当前中文句子的所有英文语块已经产生完毕。"""
+    await translated_queue.put(
+        {
+            "event": "sentence_end",
+            "sentence_id": sentence_id,
+            "full_translation": full_translation,
+            "segment_count": segment_count,
+        }
+    )
+
+
 async def request_full_translation(
     client: AsyncOpenAI,
     chinese_text: str,
@@ -182,12 +216,18 @@ async def translation_worker(
                 print(f"英文：{english_text}")
                 print(f"翻译耗时：{latency_ms:.0f} ms")
                 await translated_queue.put(
-                    (
+                    _translation_segment_message(
                         english_text,
                         translation_finished_at,
                         sentence_id,
                         1,
                     )
+                )
+                await _publish_sentence_end(
+                    translated_queue,
+                    sentence_id,
+                    english_text,
+                    1,
                 )
                 await _log_translation_result(
                     performance_logger,
@@ -326,7 +366,18 @@ async def _fallback_to_full_translation(
     print("\n[Full Streaming Translation]")
     print(english_text)
     await translated_queue.put(
-        (english_text, segment_ready_at, sentence_id, 1)
+        _translation_segment_message(
+            english_text,
+            segment_ready_at,
+            sentence_id,
+            1,
+        )
+    )
+    await _publish_sentence_end(
+        translated_queue,
+        sentence_id,
+        english_text,
+        1,
     )
     ttft_ms, ttfs_ms, total_latency_ms = _print_streaming_metrics(
         request_started_at,
@@ -402,7 +453,7 @@ async def streaming_translation_worker(
 
                 # 同一Queue继续传递文本、准备时间、句子编号和语块编号。
                 await translated_queue.put(
-                    (
+                    _translation_segment_message(
                         segment,
                         segment_ready_at,
                         sentence_id,
@@ -513,6 +564,12 @@ async def streaming_translation_worker(
                     segment_count,
                     True,
                 )
+                await _publish_sentence_end(
+                    translated_queue,
+                    sentence_id,
+                    full_translation,
+                    segment_count,
+                )
                 continue
 
             if not full_translation:
@@ -555,6 +612,12 @@ async def streaming_translation_worker(
                 total_latency_ms,
                 segment_count,
                 True,
+            )
+            await _publish_sentence_end(
+                translated_queue,
+                sentence_id,
+                full_translation,
+                segment_count,
             )
     finally:
         await client.close()
