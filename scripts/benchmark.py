@@ -9,6 +9,7 @@ from core.text_utils import levenshtein_distance, normalize_text
 
 def save_benchmark_result(result: dict) -> None:
     """把一条 Benchmark 结果追加为 JSON Lines（每行一个 JSON 对象）。"""
+    BENCHMARK_RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
     with BENCHMARK_RESULTS_PATH.open("a", encoding="utf-8") as file:
         file.write(json.dumps(result, ensure_ascii=False) + "\n")
 

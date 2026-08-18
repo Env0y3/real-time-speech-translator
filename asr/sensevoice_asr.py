@@ -3,6 +3,7 @@ import re
 import time
 from collections import deque
 from datetime import datetime
+from functools import lru_cache
 from statistics import median
 
 import numpy as np
@@ -23,6 +24,7 @@ from config import (
 )
 
 
+@lru_cache(maxsize=1)
 def load_sensevoice_model():
     """延迟导入 FunASR，并在 CPU 上加载 SenseVoiceSmall。"""
     # Lazy Import（延迟导入）确保 Normal Mode 不加载 FunASR/PyTorch。

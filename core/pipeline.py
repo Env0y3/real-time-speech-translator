@@ -334,6 +334,6 @@ async def run_normal_pipeline(
         raise
     finally:
         await performance_logger.log({"event": "session_end"})
-        performance_logger.emit_event({"type": "status", "status": "Idle"})
+        performance_logger.emit_event({"type": "status", "status": "Ready"})
 
     print("所有任务正常退出")

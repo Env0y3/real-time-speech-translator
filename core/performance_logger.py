@@ -43,6 +43,7 @@ class PerformanceLogger:
 
     def _append_sync(self, record: dict[str, Any]) -> None:
         """同步追加一行 JSON；由后台线程调用，避免阻塞 Event Loop。"""
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
         with self.log_path.open("a", encoding="utf-8") as log_file:
             json.dump(record, log_file, ensure_ascii=False)
             log_file.write("\n")

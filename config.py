@@ -1,4 +1,4 @@
-from pathlib import Path
+from core.paths import get_resource_path, get_resource_root, get_user_data_path
 
 
 # V2 的 Microphone（麦克风）基础配置。
@@ -66,19 +66,17 @@ HOTWORD_TEST_SENTENCES = [
 HOTWORD_CORRECTION_THRESHOLD = 0.80  # 最佳候选至少达到此相似度才纠错
 HOTWORD_MARGIN_THRESHOLD = 0.10  # 最佳候选必须明显领先第二候选
 HOTWORD_MAX_PHRASE_TOKENS = 3  # 最多合并三个相邻英文 token（词元）
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = get_resource_root()
 MODEL_PATH = (
-    PROJECT_ROOT
-    / "models"
-    / VOSK_MODEL_NAME
+    get_resource_path("models", VOSK_MODEL_NAME)
 )
 BENCHMARK_RESULTS_PATH = (
-    PROJECT_ROOT / "logs" / "asr_benchmark_results.jsonl"
+    get_user_data_path("logs", "asr_benchmark_results.jsonl")
 )
 RUNTIME_LATENCY_LOG_PATH = (
-    PROJECT_ROOT / "logs" / "runtime_latency_log.jsonl"
+    get_user_data_path("logs", "runtime_latency_log.jsonl")
 )
-HOTWORDS_PATH = PROJECT_ROOT / "data" / "hotwords.json"
+HOTWORDS_PATH = get_resource_path("data", "hotwords.json")
 NORMALIZATION_PUNCTUATION = set(
     "，。！？；：、“”‘’,.!?;:\"'"
 )
