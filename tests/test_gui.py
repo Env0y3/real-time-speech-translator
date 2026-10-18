@@ -1,22 +1,28 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 try:
+    import PySide6
+except ModuleNotFoundError as error:
+    if error.name != "PySide6":
+        raise
+    PYSIDE_AVAILABLE = False
+else:
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication
 
-    from core.audio_devices import AudioDeviceInfo
-    from gui.main_window import MAX_TEXT_HISTORY, MainWindow
+    from core.audio_devices import AudioDeviceInfo, AudioRoutingError
+    from gui.main_window import MAX_TEXT_HISTORY, MainWindow, UNAVAILABLE_ROLE
 
     PYSIDE_AVAILABLE = True
-except ImportError:
-    PYSIDE_AVAILABLE = False
 
 
 @unittest.skipUnless(PYSIDE_AVAILABLE, "PySide6 is not installed")
@@ -54,6 +60,12 @@ class MainWindowTests(unittest.TestCase):
 
     def _make_ready(self, window: MainWindow | None = None) -> None:
         (window or self.window)._on_initialization_ready()
+
+    def test_initialization_error_does_not_keep_loading_message(self):
+        self.window._on_initialization_error("model_load_failed", "synthetic")
+        self.assertEqual(self.window._status, "ERROR")
+        self.assertFalse(self.window.start_button.isEnabled())
+        self.assertIn("初始化失败", self.window.startup_detail_label.text())
 
     def test_startup_is_loading_and_start_is_disabled(self) -> None:
         self.assertEqual(self.window._status, "LOADING")
@@ -133,7 +145,7 @@ class MainWindowTests(unittest.TestCase):
         finally:
             restored.close()
 
-    def test_missing_saved_device_falls_back_without_crashing(self) -> None:
+    def test_missing_saved_device_stays_unavailable_without_crashing(self) -> None:
         self.window.output_combo.setCurrentIndex(
             self.window.output_combo.findData(1)
         )
@@ -144,9 +156,89 @@ class MainWindowTests(unittest.TestCase):
 
         restored = self._new_window()
         try:
-            self.assertIsNone(restored.output_combo.currentData())
+            self.assertTrue(restored.output_combo.currentData(UNAVAILABLE_ROLE))
+            with self.assertRaises(AudioRoutingError):
+                restored._runtime_options()
             self.assertFalse(restored.notice_label.isHidden())
             self.assertIn("输出设备不可用", restored.notice_label.text())
+        finally:
+            restored.close()
+
+    def test_reused_index_does_not_restore_missing_name_and_reselection_saves(self):
+        self.window.output_combo.setCurrentIndex(self.window.output_combo.findData(1))
+        self.devices[1] = AudioDeviceInfo(1, "Unexpected speaker", 0, 2, 48000)
+        self.window.refresh_devices()
+        self.assertTrue(self.window.output_combo.currentData(UNAVAILABLE_ROLE))
+        with self.assertRaises(AudioRoutingError):
+            self.window._runtime_options()
+        # Refresh and unrelated settings must not forget the missing identity.
+        self.window.language_combo.setCurrentIndex(self.window.language_combo.findData("en"))
+        self.window.refresh_devices()
+        saved = json.loads(self.settings_path.read_text())
+        self.assertEqual(saved["translation_output_device"]["name"], "CABLE Input")
+        self.window.output_combo.setCurrentIndex(self.window.output_combo.findData(2))
+        self.assertEqual(self.window._runtime_options().translation_output_device, 2)
+        saved = json.loads(self.settings_path.read_text())
+        self.assertEqual(saved["translation_output_device"]["name"], "Speakers")
+        self.assertNotIn("saved_output_missing", self.window._notice_keys)
+
+    def test_missing_monitor_only_blocks_when_enabled(self):
+        self.window.monitor_combo.setCurrentIndex(self.window.monitor_combo.findData(2))
+        self.devices = self.devices[:2]
+        self.window.refresh_devices()
+        self.assertTrue(self.window.monitor_combo.currentData(UNAVAILABLE_ROLE))
+        self.assertFalse(self.window._runtime_options().local_monitor_enabled)
+        self.window.monitor_checkbox.setChecked(True)
+        with self.assertRaises(AudioRoutingError):
+            self.window._runtime_options()
+        self.window.monitor_checkbox.setChecked(False)
+        self.assertFalse(self.window._runtime_options().local_monitor_enabled)
+        # Choosing the system default is an explicit recovery action.
+        self.window.monitor_combo.setCurrentIndex(0)
+        self.window.monitor_checkbox.setChecked(True)
+        self.assertIsNone(self.window._runtime_options().monitor_device)
+
+    def test_missing_translation_output_blocks_even_with_monitor_disabled(self):
+        self.window.output_combo.setCurrentIndex(self.window.output_combo.findData(1))
+        self.devices = [self.devices[0], self.devices[2]]
+        self.window.refresh_devices()
+        self.window.monitor_checkbox.setChecked(False)
+        with self.assertRaises(AudioRoutingError):
+            self.window._runtime_options()
+        self.window.output_combo.setCurrentIndex(0)
+        self.assertIsNone(self.window._runtime_options().translation_output_device)
+
+    def test_failed_refresh_blocks_stale_routes(self):
+        with patch("gui.main_window.list_audio_devices", side_effect=RuntimeError("offline")):
+            self.window.refresh_devices()
+        with self.assertRaises(AudioRoutingError):
+            self.window._runtime_options()
+        self.window.refresh_devices()
+        self.window._runtime_options()
+
+    def test_persisted_index_only_requires_reselection(self):
+        for selection in (1, {"index": 1, "name": None}):
+            with self.subTest(selection=selection):
+                self.settings_path.write_text(json.dumps({
+                    "translation_output_device": selection,
+                }))
+                restored = self._new_window()
+                try:
+                    self.assertTrue(restored.output_combo.currentData(UNAVAILABLE_ROLE))
+                    with self.assertRaises(AudioRoutingError):
+                        restored._runtime_options()
+                finally:
+                    restored.close()
+
+    def test_explicit_config_index_is_resolved_and_saved_with_name(self):
+        with patch("gui.main_window.TRANSLATION_OUTPUT_DEVICE", 1):
+            restored = self._new_window()
+        try:
+            self.assertFalse(restored.output_combo.currentData(UNAVAILABLE_ROLE))
+            self.assertEqual(restored._runtime_options().translation_output_device, 1)
+            restored._save_settings()
+            settings = json.loads(self.settings_path.read_text())
+            self.assertEqual(settings["translation_output_device"]["name"], "CABLE Input")
         finally:
             restored.close()
 
@@ -255,6 +347,51 @@ class MainWindowTests(unittest.TestCase):
         self.assertIn("I'm testing", self.window.english_text.toPlainText())
         self.assertIn("2.43 s", self.window.latency_total.text())
         self.assertIn("600 ms", self.window.latency_detail.text())
+
+    def test_playback_error_stops_worker_and_preserves_error_status(self):
+        self._make_ready()
+        thread = Mock()
+        self.window.pipeline_thread = thread
+        self.window._set_running_controls(True)
+        self.window._handle_pipeline_event({
+            "type": "playback_error",
+            "status": "Error",
+            "error_category": "audio_output_failed",
+        })
+        thread.request_stop.assert_called_once_with()
+        self.assertEqual(self.window._status, "ERROR")
+        self.assertEqual(self.window._error_key, "audio_output_failed")
+        self.assertFalse(self.window.stop_button.isEnabled())
+        self.window._handle_pipeline_event({"type": "status", "status": "Ready"})
+        self.assertEqual(self.window._status, "ERROR")
+        self.window._pipeline_finished()
+        self.assertEqual(self.window._status, "ERROR")
+        self.assertIsNone(self.window.pipeline_thread)
+        self.assertTrue(self.window.start_button.isEnabled())
+
+    def test_latency_shows_both_boundaries_and_write_approximation(self):
+        self.window._update_latency({
+            "speech_end_to_first_playback_ms": 100,
+            "endpoint_trigger_to_first_playback_ms": 800,
+            "last_voice_to_first_playback_ms": 1450,
+        })
+        self.assertIn("800 ms", self.window.latency_total.text())
+        self.assertIn("1.45 s", self.window.latency_total.text())
+        self.assertNotIn("100 ms", self.window.latency_total.text())
+        self.assertIn("不是扬声器实际出声", self.window.latency_total.toolTip())
+        self.window.language_combo.setCurrentIndex(self.window.language_combo.findData("en"))
+        self.assertIn("Last Voice", self.window.latency_total.text())
+        self.assertIn("not acoustic", self.window.latency_total.toolTip())
+
+    def test_failed_initial_enumeration_preserves_saved_identity(self):
+        self.window.output_combo.setCurrentIndex(self.window.output_combo.findData(1))
+        with patch("gui.main_window.list_audio_devices", side_effect=RuntimeError("offline")):
+            restored = self._new_window()
+            restored.close()
+        saved = json.loads(self.settings_path.read_text())
+        self.assertEqual(saved["translation_output_device"]["name"], "CABLE Input")
+        restored.refresh_devices()
+        self.assertEqual(restored.output_combo.currentData(), 1)
 
     def test_text_history_is_limited(self) -> None:
         for index in range(MAX_TEXT_HISTORY + 25):

@@ -29,6 +29,35 @@ class AudioRoutingPlan:
         return self.monitor_requested and self.monitor_device is not None
 
 
+def restore_saved_device(
+    devices: list[AudioDeviceInfo],
+    index: int | None,
+    name: str | None,
+    *,
+    allow_index: bool = False,
+) -> AudioDeviceInfo | None:
+    """Restore a persisted selection without trusting a reused device index.
+
+    A saved name is authoritative. Duplicate names are ambiguous even when an
+    old index matches: PortAudio indexes are not persistent identities.
+    Persisted index-only selections cannot identify a device safely. The caller
+    may opt into index matching for an explicit current configuration value.
+    None represents an explicitly selected system default only.
+    """
+    if name:
+        matches = [d for d in devices if d.name.casefold() == name.casefold()]
+    elif index is not None:
+        matches = [d for d in devices if d.index == index] if allow_index else []
+    else:
+        return None
+    if len(matches) != 1:
+        raise AudioRoutingError(
+            f'Saved audio device "{name or index}" is unavailable or ambiguous; '
+            "select a device again."
+        )
+    return matches[0]
+
+
 def list_audio_devices() -> list[AudioDeviceInfo]:
     """返回 PortAudio 当前可见的全部输入和输出设备。"""
     return [

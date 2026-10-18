@@ -1,0 +1,141 @@
+test_input_device_selection_reuses_shared_device_list (test_audio_devices.AudioDeviceTests.test_input_device_selection_reuses_shared_device_list) ... ok
+test_input_only_device_is_rejected (test_audio_devices.AudioDeviceTests.test_input_only_device_is_rejected) ... ok
+test_integer_and_unique_name_selection (test_audio_devices.AudioDeviceTests.test_integer_and_unique_name_selection) ... ok
+test_invalid_device_id_is_rejected (test_audio_devices.AudioDeviceTests.test_invalid_device_id_is_rejected) ... ok
+test_invalid_monitor_is_disabled_without_affecting_primary (test_audio_devices.AudioDeviceTests.test_invalid_monitor_is_disabled_without_affecting_primary) ... ok
+test_list_audio_devices_exposes_required_fields (test_audio_devices.AudioDeviceTests.test_list_audio_devices_exposes_required_fields) ... ok
+test_output_only_device_is_rejected_as_input (test_audio_devices.AudioDeviceTests.test_output_only_device_is_rejected_as_input) ... ok
+test_pcm_settings_are_checked (test_audio_devices.AudioDeviceTests.test_pcm_settings_are_checked) ... ok
+test_duplicate_name_is_ambiguous_even_at_old_index (test_audio_devices.SavedDeviceTests.test_duplicate_name_is_ambiguous_even_at_old_index) ... ok
+test_explicit_current_config_index_can_select_device (test_audio_devices.SavedDeviceTests.test_explicit_current_config_index_can_select_device) ... ok
+test_legacy_index_only_selection_requires_reselection (test_audio_devices.SavedDeviceTests.test_legacy_index_only_selection_requires_reselection) ... ok
+test_missing_name_never_uses_recycled_index (test_audio_devices.SavedDeviceTests.test_missing_name_never_uses_recycled_index) ... ok
+test_name_does_not_partially_match_another_device (test_audio_devices.SavedDeviceTests.test_name_does_not_partially_match_another_device) ... ok
+test_name_wins_when_index_changes (test_audio_devices.SavedDeviceTests.test_name_wins_when_index_changes) ... ok
+test_safe_default_does_not_depend_on_machine_index (test_audio_devices.SavedDeviceTests.test_safe_default_does_not_depend_on_machine_index) ... ok
+test_explicit_output_failure_never_falls_back_to_speakers (test_audio_routing.ExplicitOutputFailureTests.test_explicit_output_failure_never_falls_back_to_speakers) ... ok
+test_explicit_routing_disables_local_sentence_fallback (test_audio_routing.ExplicitOutputFailureTests.test_explicit_routing_disables_local_sentence_fallback) ... ok
+test_output_stream_uses_selected_device_and_existing_pcm_format (test_audio_routing.OutputStreamCreationTests.test_output_stream_uses_selected_device_and_existing_pcm_format) ... ok
+test_monitor_failure_disables_only_monitor (test_audio_routing.RoutedAudioWriteTests.test_monitor_failure_disables_only_monitor) ... ok
+test_monitor_off_writes_primary_once (test_audio_routing.RoutedAudioWriteTests.test_monitor_off_writes_primary_once) ... ok
+test_monitor_on_writes_same_pcm_to_both_streams (test_audio_routing.RoutedAudioWriteTests.test_monitor_on_writes_same_pcm_to_both_streams) ... ok
+test_filler_inside_sentence_is_kept (test_false_trigger_filter.FalseTriggerRuleTests.test_filler_inside_sentence_is_kept) ... ok
+test_missing_duration_is_kept (test_false_trigger_filter.FalseTriggerRuleTests.test_missing_duration_is_kept) ... ok
+test_natural_length_filler_is_kept (test_false_trigger_filter.FalseTriggerRuleTests.test_natural_length_filler_is_kept) ... ok
+test_real_short_phrases_are_kept (test_false_trigger_filter.FalseTriggerRuleTests.test_real_short_phrases_are_kept) ... ok
+test_short_fillers_are_dropped (test_false_trigger_filter.FalseTriggerRuleTests.test_short_fillers_are_dropped) ... ok
+test_threshold_is_inclusive_and_conservative (test_false_trigger_filter.FalseTriggerRuleTests.test_threshold_is_inclusive_and_conservative) ... ok
+test_timestamp_duration_fallback_uses_monotonic_values (test_false_trigger_filter.FalseTriggerRuleTests.test_timestamp_duration_fallback_uses_monotonic_values) ... ok
+test_drop_never_reaches_downstream_and_is_logged (test_false_trigger_filter.FalseTriggerWorkerTests.test_drop_never_reaches_downstream_and_is_logged) ... ok
+test_close_while_running_requests_graceful_stop (test_gui.MainWindowTests.test_close_while_running_requests_graceful_stop) ... skipped 'PySide6 is not installed'
+test_device_lists_filter_by_channel_direction (test_gui.MainWindowTests.test_device_lists_filter_by_channel_direction) ... skipped 'PySide6 is not installed'
+test_device_selection_is_saved_and_restored_by_name (test_gui.MainWindowTests.test_device_selection_is_saved_and_restored_by_name) ... skipped 'PySide6 is not installed'
+test_explicit_config_index_is_resolved_and_saved_with_name (test_gui.MainWindowTests.test_explicit_config_index_is_resolved_and_saved_with_name) ... skipped 'PySide6 is not installed'
+test_failed_initial_enumeration_preserves_saved_identity (test_gui.MainWindowTests.test_failed_initial_enumeration_preserves_saved_identity) ... skipped 'PySide6 is not installed'
+test_failed_refresh_blocks_stale_routes (test_gui.MainWindowTests.test_failed_refresh_blocks_stale_routes) ... skipped 'PySide6 is not installed'
+test_initialization_error_does_not_keep_loading_message (test_gui.MainWindowTests.test_initialization_error_does_not_keep_loading_message) ... skipped 'PySide6 is not installed'
+test_language_switch_updates_ui_and_is_persisted (test_gui.MainWindowTests.test_language_switch_updates_ui_and_is_persisted) ... skipped 'PySide6 is not installed'
+test_latency_shows_both_boundaries_and_write_approximation (test_gui.MainWindowTests.test_latency_shows_both_boundaries_and_write_approximation) ... skipped 'PySide6 is not installed'
+test_missing_api_key_is_localized_without_starting (test_gui.MainWindowTests.test_missing_api_key_is_localized_without_starting) ... skipped 'PySide6 is not installed'
+test_missing_monitor_only_blocks_when_enabled (test_gui.MainWindowTests.test_missing_monitor_only_blocks_when_enabled) ... skipped 'PySide6 is not installed'
+test_missing_saved_device_stays_unavailable_without_crashing (test_gui.MainWindowTests.test_missing_saved_device_stays_unavailable_without_crashing) ... skipped 'PySide6 is not installed'
+test_missing_translation_output_blocks_even_with_monitor_disabled (test_gui.MainWindowTests.test_missing_translation_output_blocks_even_with_monitor_disabled) ... skipped 'PySide6 is not installed'
+test_monitor_dropdown_tracks_checkbox (test_gui.MainWindowTests.test_monitor_dropdown_tracks_checkbox) ... skipped 'PySide6 is not installed'
+test_persisted_index_only_requires_reselection (test_gui.MainWindowTests.test_persisted_index_only_requires_reselection) ... skipped 'PySide6 is not installed'
+test_pipeline_events_update_text_and_trace_latency (test_gui.MainWindowTests.test_pipeline_events_update_text_and_trace_latency) ... skipped 'PySide6 is not installed'
+test_playback_error_stops_worker_and_preserves_error_status (test_gui.MainWindowTests.test_playback_error_stops_worker_and_preserves_error_status) ... skipped 'PySide6 is not installed'
+test_real_initialization_signal_enables_start (test_gui.MainWindowTests.test_real_initialization_signal_enables_start) ... skipped 'PySide6 is not installed'
+test_reused_index_does_not_restore_missing_name_and_reselection_saves (test_gui.MainWindowTests.test_reused_index_does_not_restore_missing_name_and_reselection_saves) ... skipped 'PySide6 is not installed'
+test_start_stop_and_restart_keep_ui_responsive (test_gui.MainWindowTests.test_start_stop_and_restart_keep_ui_responsive) ... skipped 'PySide6 is not installed'
+test_startup_is_loading_and_start_is_disabled (test_gui.MainWindowTests.test_startup_is_loading_and_start_is_disabled) ... skipped 'PySide6 is not installed'
+test_text_history_is_limited (test_gui.MainWindowTests.test_text_history_is_limited) ... skipped 'PySide6 is not installed'
+test_virtual_cable_absence_is_nonfatal_notice (test_gui.MainWindowTests.test_virtual_cable_absence_is_nonfatal_notice) ... skipped 'PySide6 is not installed'
+test_broken_qt_import_is_not_hidden (test_gui_collection.GuiCollectionTests.test_broken_qt_import_is_not_hidden) ... ok
+test_missing_pyside_collects_skipped_class_without_annotation_error (test_gui_collection.GuiCollectionTests.test_missing_pyside_collects_skipped_class_without_annotation_error) ... ok
+test_unrelated_missing_module_is_not_hidden (test_gui_collection.GuiCollectionTests.test_unrelated_missing_module_is_not_hidden) ... ok
+test_invalid_input_is_logged_and_never_published (test_input_guard.InputValidityGuardWorkerTests.test_invalid_input_is_logged_and_never_published) ... ok
+test_chinese_english_and_digits_are_valid (test_input_guard.MeaningfulContentTests.test_chinese_english_and_digits_are_valid) ... ok
+test_empty_whitespace_and_punctuation_are_invalid (test_input_guard.MeaningfulContentTests.test_empty_whitespace_and_punctuation_are_invalid) ... ok
+test_endpoint_and_last_voice_are_distinct (test_latency_semantics.LatencyDefinitionTests.test_endpoint_and_last_voice_are_distinct) ... ok
+test_statistics_require_explicit_session_and_keep_legacy_alias (test_latency_semantics.LatencyDefinitionTests.test_statistics_require_explicit_session_and_keep_legacy_alias) ... ok
+test_unknown_is_not_zero_or_fabricated (test_latency_semantics.LatencyDefinitionTests.test_unknown_is_not_zero_or_fabricated) ... ok
+test_append_preserves_old_record_and_emits_new_fields (test_latency_semantics.LatencyLogCompatibilityTests.test_append_preserves_old_record_and_emits_new_fields) ... ok
+test_failure_is_reported_and_worker_stops (test_local_tts_routing.LocalTTSFailureTests.test_failure_is_reported_and_worker_stops) ... TTS Provider: ElevenLabs
+Voice: JBFqnCBsd6RMkjVDRZzb
+Model: eleven_flash_v2_5
+Output: pcm_24000
+Global Audio Queue: maxsize=50
+[Audio Routing Warning] Local monitor write failed and was disabled ([4] Speakers): RuntimeError: monitor unavailable
+
+[False Trigger Filter]
+Text: 嗯
+Speech Duration: 180 ms
+Action: DROP
+Reason: short_filler
+False Trigger Filter Worker 已结束
+
+[Input Guard]
+Text: 。
+Action: DROP
+Reason: no_meaningful_content
+Input Validity Guard Worker 已结束
+TTS 已就绪：pyttsx3 英文语音
+
+[TTS]
+准备播放：Synthetic phrase
+ok
+test_default_without_monitor_is_supported (test_local_tts_routing.LocalTTSRoutingTests.test_default_without_monitor_is_supported) ... ok
+test_explicit_output_cannot_be_ignored (test_local_tts_routing.LocalTTSRoutingTests.test_explicit_output_cannot_be_ignored) ... ok
+test_monitor_cannot_be_ignored (test_local_tts_routing.LocalTTSRoutingTests.test_monitor_cannot_be_ignored) ... ok
+test_benchmark_mode_still_uses_existing_entry (test_main_entry.MainEntryTests.test_benchmark_mode_still_uses_existing_entry) ... ok
+test_normal_mode_still_uses_shared_cli_pipeline (test_main_entry.MainEntryTests.test_normal_mode_still_uses_shared_cli_pipeline) ... ok
+test_preloaded_model_is_reused_by_pipeline_worker (test_model_preload.SenseVoicePreloadTests.test_preloaded_model_is_reused_by_pipeline_worker) ... ok
+test_normal_mode_guard_wiring (test_normal_mode_guard_chain.NormalModeGuardChainSmokeTest.test_normal_mode_guard_wiring) ... ok
+test_resource_path_uses_pyinstaller_bundle_root (test_paths.PathTests.test_resource_path_uses_pyinstaller_bundle_root) ... ok
+test_user_data_path_supports_deployment_override (test_paths.PathTests.test_user_data_path_supports_deployment_override) ... ok
+test_log_is_forwarded_directly_to_callback (test_performance_events.PerformanceEventTests.test_log_is_forwarded_directly_to_callback) ... ok
+test_ui_only_event_is_not_written_to_log (test_performance_events.PerformanceEventTests.test_ui_only_event_is_not_written_to_log) ... ok
+test_playback_failure_is_error_after_summary_not_listening (test_playback_error_events.PlaybackErrorEventTests.test_playback_failure_is_error_after_summary_not_listening) ... ok
+test_success_keeps_listening_status (test_playback_error_events.PlaybackErrorEventTests.test_success_keeps_listening_status) ... ok
+test_only_non_whitespace_output_is_valid (test_translation_guards.TranslationOutputTests.test_only_non_whitespace_output_is_valid) ... ok
+test_empty_full_translation_never_reaches_tts_queue (test_translation_guards.TranslationWorkerGuardTests.test_empty_full_translation_never_reaches_tts_queue) ... ok
+test_empty_stream_does_not_fallback_or_reach_tts (test_translation_guards.TranslationWorkerGuardTests.test_empty_stream_does_not_fallback_or_reach_tts) ... ok
+test_punctuation_input_never_calls_deepseek (test_translation_guards.TranslationWorkerGuardTests.test_punctuation_input_never_calls_deepseek) ... ok
+
+----------------------------------------------------------------------
+Ran 80 tests in 0.066s
+
+OK (skipped=23)
+[TTS Error] 播放失败：RuntimeError
+
+[Input Guard]
+Text: 。
+Action: DROP
+Reason: no_meaningful_content
+Input Validity Guard Worker 已结束
+
+[False Trigger Filter]
+Text: 嗯
+Speech Duration: 200 ms
+Action: DROP
+Reason: short_filler
+False Trigger Filter Worker 已结束
+Hotword Correction Worker 已结束
+Translation 已就绪：DeepSeek deepseek-v4-flash
+[Translation Error] 模型返回了空文本
+Translation Worker 已结束
+Streaming Translation 已就绪：DeepSeek deepseek-v4-flash
+
+[Streaming Translation Request]
+中文：你好
+Translation Request Start: 19:31:25
+[Streaming Translation Error] 模型返回了空流
+Streaming Translation Worker 已结束
+
+[Input Guard]
+Text: 。
+Action: DROP
+Reason: no_meaningful_content
+Input Validity Guard Worker 已结束
+Translation 已就绪：DeepSeek deepseek-v4-flash
+Translation Worker 已结束

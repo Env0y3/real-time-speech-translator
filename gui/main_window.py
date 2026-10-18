@@ -29,7 +29,10 @@ from config import (
     TTS_PROVIDER,
     TRANSLATION_OUTPUT_DEVICE,
 )
-from core.audio_devices import AudioDeviceInfo, format_device, list_audio_devices
+from core.audio_devices import (
+    AudioDeviceInfo, AudioRoutingError, format_device, list_audio_devices,
+    restore_saved_device,
+)
 from core.pipeline import (
     NormalPipelineOptions,
     validate_normal_pipeline_options,
@@ -45,6 +48,7 @@ from gui.settings import (
 
 
 DEVICE_NAME_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+UNAVAILABLE_ROLE = DEVICE_NAME_ROLE + 1
 MAX_TEXT_HISTORY = 100
 
 
@@ -64,8 +68,10 @@ class MainWindow(QMainWindow):
         self.initialization_thread: InitializationThread | None = None
         self._model_ready = False
         self._stop_requested = False
+        self._playback_failed = False
         self._close_requested = False
         self._settings_ready = False
+        self._devices_available = False
         self._status = "LOADING"
         self._startup_detail_key = "initializing"
         self._notice_keys: set[str] = set()
@@ -380,6 +386,13 @@ class MainWindow(QMainWindow):
         ):
             if combo.count():
                 combo.setItemText(0, tr("system_default", self.language))
+                for index in range(1, combo.count()):
+                    if combo.itemData(index, UNAVAILABLE_ROLE):
+                        combo.setItemText(index, tr(
+                            "device_unavailable", self.language,
+                            name=combo.itemData(index, DEVICE_NAME_ROLE)
+                            or str(combo.itemData(index)),
+                        ))
 
     def refresh_api_status(self) -> None:
         deepseek_ready = bool(os.environ.get("DEEPSEEK_API_KEY"))
@@ -414,8 +427,12 @@ class MainWindow(QMainWindow):
     ):
         saved = self.user_settings.get(key)
         if saved is not None:
+            # Older settings may store a bare index. It is a persisted index,
+            # not an explicit current config choice, and cannot prove identity.
+            if isinstance(saved, int) and not isinstance(saved, bool):
+                return {"index": saved, "name": None}
             return saved
-        return {"index": config_default, "name": None}
+        return config_default
 
     def refresh_devices(
         self,
@@ -423,7 +440,7 @@ class MainWindow(QMainWindow):
         use_saved_settings: bool = False,
     ) -> None:
         del checked
-        if use_saved_settings:
+        if use_saved_settings or not self._devices_available:
             input_selection = self._saved_device_selection(
                 "input_device",
                 None,
@@ -450,6 +467,7 @@ class MainWindow(QMainWindow):
 
         try:
             devices = list_audio_devices()
+            self._devices_available = True
             input_devices = [d for d in devices if d.max_input_channels > 0]
             output_devices = [d for d in devices if d.max_output_channels > 0]
             input_restored = self._populate_device_combo(
@@ -484,6 +502,7 @@ class MainWindow(QMainWindow):
                 self._notice_keys.add("virtual_device_missing")
             self._clear_error()
         except Exception as error:
+            self._devices_available = False
             self._show_error_key(
                 "device_refresh_failed",
                 detail=str(error),
@@ -507,34 +526,28 @@ class MainWindow(QMainWindow):
             combo.setItemData(combo.count() - 1, device.name, DEVICE_NAME_ROLE)
 
         selected_index, selected_name = self._selection_parts(selected_device)
-        explicit_selection = selected_index is not None or bool(selected_name)
-        restored_combo_index = 0
-        name_matches = []
-        if selected_name:
-            name_matches = [
-                index
-                for index in range(1, combo.count())
-                if combo.itemData(index, DEVICE_NAME_ROLE).casefold()
-                == str(selected_name).casefold()
-            ]
-        if name_matches:
-            matching_saved_index = next(
-                (
-                    index
-                    for index in name_matches
-                    if combo.itemData(index) == selected_index
-                ),
-                None,
+        restored = True
+        try:
+            device = restore_saved_device(
+                devices, selected_index, selected_name,
+                allow_index=not isinstance(selected_device, dict),
             )
-            restored_combo_index = matching_saved_index or name_matches[0]
-        elif selected_index is not None:
-            found_index = combo.findData(selected_index)
-            if found_index >= 0:
-                restored_combo_index = found_index
-
+            restored_combo_index = combo.findData(device.index) if device else 0
+        except AudioRoutingError:
+            restored = False
+            # Keep the original selection through refresh, save and restart.
+            # This placeholder is never a runnable system-default route.
+            combo.addItem(
+                tr("device_unavailable", self.language,
+                   name=selected_name or str(selected_index)),
+                selected_index,
+            )
+            restored_combo_index = combo.count() - 1
+            combo.setItemData(restored_combo_index, selected_name, DEVICE_NAME_ROLE)
+            combo.setItemData(restored_combo_index, True, UNAVAILABLE_ROLE)
         combo.setCurrentIndex(restored_combo_index)
         combo.blockSignals(False)
-        return not explicit_selection or restored_combo_index > 0
+        return restored
 
     @staticmethod
     def _selection_parts(selection) -> tuple[int | None, str | None]:
@@ -554,7 +567,7 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _device_selection(combo: QComboBox) -> dict:
         index = combo.currentData()
-        name = combo.currentData(DEVICE_NAME_ROLE) if index is not None else None
+        name = combo.currentData(DEVICE_NAME_ROLE)
         return {"index": index, "name": name}
 
     def _monitor_setting_changed(self, enabled: bool) -> None:
@@ -562,8 +575,9 @@ class MainWindow(QMainWindow):
         self._save_settings()
 
     def _save_settings(self) -> None:
-        if not self._settings_ready:
+        if not self._settings_ready or not self._devices_available:
             return
+        self._update_device_notices()
         settings = {
             "ui_language": self.language,
             "input_device": self._device_selection(self.input_combo),
@@ -578,6 +592,18 @@ class MainWindow(QMainWindow):
             save_user_settings(settings, self.settings_path)
         except OSError as error:
             print(f"[User Settings Warning] {type(error).__name__}")
+
+    def _update_device_notices(self) -> None:
+        for combo, key in (
+            (self.input_combo, "saved_input_missing"),
+            (self.output_combo, "saved_output_missing"),
+            (self.monitor_combo, "saved_monitor_missing"),
+        ):
+            if combo.currentData(UNAVAILABLE_ROLE):
+                self._notice_keys.add(key)
+            else:
+                self._notice_keys.discard(key)
+        self._update_notices()
 
     def _start_initialization(self) -> None:
         if (
@@ -613,6 +639,8 @@ class MainWindow(QMainWindow):
 
     def _on_initialization_error(self, key: str, detail: str) -> None:
         self._model_ready = False
+        self._startup_detail_key = "initialization_failed"
+        self._set_startup_detail("initialization_failed")
         self._set_status("ERROR")
         self.start_button.setEnabled(False)
         values = {"detail": detail} if detail else {}
@@ -631,6 +659,14 @@ class MainWindow(QMainWindow):
         self.startup_detail_label.setText(tr(key, self.language))
 
     def _runtime_options(self) -> NormalPipelineOptions:
+        if not self._devices_available:
+            raise AudioRoutingError(tr("device_refresh_failed", self.language, detail=""))
+        required = [self.input_combo, self.output_combo]
+        if self.monitor_checkbox.isChecked():
+            required.append(self.monitor_combo)
+        for combo in required:
+            if combo.currentData(UNAVAILABLE_ROLE):
+                raise AudioRoutingError(combo.currentText())
         return NormalPipelineOptions(
             input_device=self.input_combo.currentData(),
             translation_output_device=self.output_combo.currentData(),
@@ -656,8 +692,9 @@ class MainWindow(QMainWindow):
             self._show_error_key("missing_elevenlabs_api")
             return
 
-        options = self._runtime_options()
+        self.refresh_devices()
         try:
+            options = self._runtime_options()
             validate_normal_pipeline_options(options)
         except Exception as error:
             self._set_status("ERROR")
@@ -666,6 +703,7 @@ class MainWindow(QMainWindow):
 
         self._save_settings()
         self._stop_requested = False
+        self._playback_failed = False
         self.pipeline_thread = PipelineThread(options, self)
         self.pipeline_thread.event_received.connect(
             self._handle_pipeline_event
@@ -688,7 +726,18 @@ class MainWindow(QMainWindow):
 
     def _handle_pipeline_event(self, event: dict) -> None:
         event_type = event.get("type")
-        if event_type == "status":
+        if self._playback_failed and event_type != "playback_error":
+            # Draining worker queues may emit late Ready/Listening events.
+            # Keep a failed output visible until a fresh start is requested.
+            return
+        if event_type == "playback_error":
+            self._playback_failed = True
+            self._set_status("ERROR")
+            self._show_error_key("audio_output_failed")
+            self.stop_button.setEnabled(False)
+            if self.pipeline_thread is not None:
+                self.pipeline_thread.request_stop()
+        elif event_type == "status":
             status = self._canonical_status(event.get("status"))
             if not (self._stop_requested and status == "READY"):
                 self._set_status(status)
@@ -720,7 +769,9 @@ class MainWindow(QMainWindow):
         self._show_error_key("pipeline_error", detail=message)
 
     def _pipeline_finished(self) -> None:
-        failed = self._status == "ERROR" and not self._stop_requested
+        failed = self._playback_failed or (
+            self._status == "ERROR" and not self._stop_requested
+        )
         thread = self.pipeline_thread
         self.pipeline_thread = None
         self._set_running_controls(False)
@@ -807,7 +858,8 @@ class MainWindow(QMainWindow):
     def _update_latency(self, event: dict) -> None:
         self._last_latency_event = dict(event)
         total = self._format_latency(
-            event.get("speech_end_to_first_playback_ms")
+            event.get("endpoint_trigger_to_first_playback_ms",
+                      event.get("speech_end_to_first_playback_ms"))
         )
         endpoint = self._format_latency(event.get("endpoint_wait_ms"))
         asr = self._format_latency(event.get("asr_stage_ms"))
@@ -823,7 +875,12 @@ class MainWindow(QMainWindow):
                 self.language,
                 value=total,
             )
+            + "\n" + tr(
+                "last_voice_first_playback", self.language,
+                value=self._format_latency(event.get("last_voice_to_first_playback_ms")),
+            )
         )
+        self.latency_total.setToolTip(tr("playback_approximation", self.language))
         self.latency_detail.setText(
             "   ".join(
                 [

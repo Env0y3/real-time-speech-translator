@@ -1,0 +1,8 @@
+# Core runtime. Tested together on CPython 3.12.14 / Linux x86_64.
+# PortAudio is an OS dependency on Linux; see README.md.
+numpy==2.2.6
+sounddevice==0.5.6
+vosk==0.3.45
+openai==2.54.0
+websockets==16.1.1
+pyttsx3==2.99

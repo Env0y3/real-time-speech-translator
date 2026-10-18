@@ -1,0 +1,4 @@
+请选择运行模式：
+1. Normal Mode（正常实时翻译模式）
+2. ASR Benchmark Mode（ASR 测试模式）
+请输入 1 或 2：没有收到模式选择，程序结束

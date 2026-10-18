@@ -19,24 +19,29 @@ TRANSLATIONS = {
         "start_translation": "开始翻译",
         "stop_translation": "停止翻译",
         "system_default": "系统默认",
+        "audio_output_failed": "音频输出失败，已请求停止。请检查设备后重新选择并开始。",
+        "device_unavailable": "不可用，请重新选择：{name}",
+        "last_voice_first_playback": "末次语音 → 首次软件播放：{value}",
+        "playback_approximation": "首次软件播放：PCM为输出流首次写入；pyttsx3回退为词回调或调用起点。都不是扬声器实际出声；整体等待包含断句。",
         "chinese_placeholder": "等待识别中文语音…",
         "english_placeholder": "等待英文翻译…",
-        "speech_end_first_playback": "语音结束 → 首次播放：{value}",
-        "endpoint": "端点：{value}",
+        "speech_end_first_playback": "断句触发 → 首次软件播放：{value}",
+        "endpoint": "断句等待：{value}",
         "asr_latency": "识别：{value}",
         "translation_latency": "翻译：{value}",
-        "tts_latency": "合成：{value}",
+        "tts_latency": "首翻译段→首音频：{value}",
         "api_ready": "✓ 已就绪",
         "api_missing": "✗ 未配置",
         "initializing": "正在初始化…",
+        "initialization_failed": "初始化失败，请检查下方错误提示。",
         "checking_model": "正在检查语音识别模型…",
         "loading_model": "正在下载/加载 SenseVoiceSmall…",
         "checking_audio": "正在检查音频设备…",
-        "ready_detail": "SenseVoiceSmall 已加载，可以开始翻译。",
+        "ready_detail": "语音识别模型已加载，可以开始翻译。",
         "virtual_device_missing": "未检测到虚拟音频设备，Discord 虚拟麦克风功能不可用。",
-        "saved_input_missing": "上次选择的输入设备不可用，已切换到系统默认。",
+        "saved_input_missing": "上次选择的输入设备不可用，请重新选择。",
         "saved_output_missing": "上次选择的输出设备不可用，请重新选择。",
-        "saved_monitor_missing": "上次选择的监听设备不可用，已切换到系统默认。",
+        "saved_monitor_missing": "上次选择的监听设备不可用，请重新选择。",
         "device_refresh_failed": "刷新音频设备失败：{detail}",
         "missing_deepseek_api": "未配置 DEEPSEEK_API_KEY。",
         "missing_elevenlabs_api": "未配置 ELEVENLABS_API_KEY。",
@@ -73,27 +78,32 @@ TRANSLATIONS = {
         "start_translation": "Start Translation",
         "stop_translation": "Stop Translation",
         "system_default": "System Default",
+        "audio_output_failed": "Audio output failed; stop requested. Check and reselect the device before restarting.",
+        "device_unavailable": "Unavailable; choose again: {name}",
+        "last_voice_first_playback": "Last Voice → First Software Playback: {value}",
+        "playback_approximation": "PCM timing estimates first output write; pyttsx3 fallback uses word callback or invocation. These are not acoustic speaker measurements. Overall wait includes endpoint waiting.",
         "chinese_placeholder": "Waiting for Chinese speech…",
         "english_placeholder": "Waiting for translation…",
-        "speech_end_first_playback": "Speech End → First Playback: {value}",
-        "endpoint": "Endpoint: {value}",
+        "speech_end_first_playback": "Endpoint Trigger → First Software Playback: {value}",
+        "endpoint": "Endpoint Wait: {value}",
         "asr_latency": "ASR: {value}",
         "translation_latency": "Translation: {value}",
         "tts_latency": "TTS: {value}",
         "api_ready": "✓ Ready",
         "api_missing": "✗ Missing",
         "initializing": "Initializing…",
+        "initialization_failed": "Initialization failed; check the error below.",
         "checking_model": "Checking the speech recognition model…",
         "loading_model": "Downloading/loading SenseVoiceSmall…",
         "checking_audio": "Checking audio devices…",
-        "ready_detail": "SenseVoiceSmall is loaded. Translation can start.",
+        "ready_detail": "Speech recognition model is loaded. Translation can start.",
         "virtual_device_missing": (
             "No virtual audio device detected. "
             "Discord virtual microphone is unavailable."
         ),
         "saved_input_missing": (
             "The previously selected input device is unavailable. "
-            "System Default is selected."
+            "Please select another device."
         ),
         "saved_output_missing": (
             "The previously selected output device is unavailable. "
@@ -101,7 +111,7 @@ TRANSLATIONS = {
         ),
         "saved_monitor_missing": (
             "The previously selected monitor device is unavailable. "
-            "System Default is selected."
+            "Please select another device."
         ),
         "device_refresh_failed": "Audio device refresh failed: {detail}",
         "missing_deepseek_api": "DEEPSEEK_API_KEY is not configured.",

@@ -86,6 +86,11 @@ def validate_normal_pipeline_options(
 
     resolve_input_device(options.input_device)
     if TTS_PROVIDER != "elevenlabs":
+        if options.translation_output_device is not None or options.local_monitor_enabled:
+            raise ValueError(
+                "pyttsx3 only supports system default output without local monitor; "
+                "use elevenlabs for explicit output routing."
+            )
         return None
     return build_audio_routing_plan(
         options.translation_output_device,

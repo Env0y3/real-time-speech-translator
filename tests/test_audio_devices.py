@@ -2,7 +2,9 @@ import unittest
 from unittest.mock import patch
 
 from core.audio_devices import (
+    AudioDeviceInfo,
     AudioRoutingError,
+    restore_saved_device,
     build_audio_routing_plan,
     list_audio_devices,
     resolve_audio_device,
@@ -31,6 +33,47 @@ FAKE_DEVICES = [
         "default_samplerate": 48_000,
     },
 ]
+
+
+class SavedDeviceTests(unittest.TestCase):
+    def setUp(self):
+        self.devices = [
+            AudioDeviceInfo(4, "Other speaker", 0, 2, 48000),
+            AudioDeviceInfo(9, "Saved cable", 0, 2, 48000),
+        ]
+
+    def test_safe_default_does_not_depend_on_machine_index(self):
+        from config import TRANSLATION_OUTPUT_DEVICE
+        self.assertIsNone(TRANSLATION_OUTPUT_DEVICE)
+        self.assertIsNone(restore_saved_device(self.devices, None, None))
+
+    def test_name_wins_when_index_changes(self):
+        self.assertEqual(restore_saved_device(self.devices, 4, "saved CABLE").index, 9)
+
+    def test_missing_name_never_uses_recycled_index(self):
+        with self.assertRaises(AudioRoutingError):
+            restore_saved_device(self.devices, 4, "Disconnected speaker")
+
+    def test_duplicate_name_is_ambiguous_even_at_old_index(self):
+        self.devices.append(AudioDeviceInfo(10, "Saved cable", 0, 2, 48000))
+        with self.assertRaises(AudioRoutingError):
+            restore_saved_device(self.devices, 9, "Saved cable")
+
+    def test_legacy_index_only_selection_requires_reselection(self):
+        for index in (4, 123):
+            with self.subTest(index=index), self.assertRaises(AudioRoutingError):
+                restore_saved_device(self.devices, index, None)
+
+    def test_explicit_current_config_index_can_select_device(self):
+        self.assertEqual(
+            restore_saved_device(self.devices, 4, None, allow_index=True).index, 4
+        )
+        with self.assertRaises(AudioRoutingError):
+            restore_saved_device(self.devices, 123, None, allow_index=True)
+
+    def test_name_does_not_partially_match_another_device(self):
+        with self.assertRaises(AudioRoutingError):
+            restore_saved_device(self.devices, None, "Saved")
 
 
 class AudioDeviceTests(unittest.TestCase):

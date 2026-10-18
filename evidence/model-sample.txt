@@ -1,0 +1,13 @@
+funasr version: 1.4.16.
+2026-10-17 19:30:14,897 [INFO] download models from model hub: ms
+2026-10-17 19:30:23,673 | INFO    | modelscope_hub.download | Downloading 20 files from iic/SenseVoiceSmall@master
+Downloading:   0%|          | 0/20 [00:00<?, ?file/s]Downloading: 100%|██████████| 20/20 [00:00<00:00, 26.11file/s]Downloading: 100%|██████████| 20/20 [00:00<00:00, 26.10file/s]
+2026-10-17 19:30:24,459 [WARNING] trust_remote_code: False
+2026-10-17 19:30:25,962 [INFO] Loading pretrained params from /workspace/scratch/24b743f0f6b2/translator-model-cache/models/iic--SenseVoiceSmall/snapshots/master/model.pt
+2026-10-17 19:30:25,965 [INFO] ckpt: /workspace/scratch/24b743f0f6b2/translator-model-cache/models/iic--SenseVoiceSmall/snapshots/master/model.pt
+2026-10-17 19:30:27,064 [INFO] scope_map: ['module.', 'None']
+2026-10-17 19:30:27,064 [INFO] excludes: None
+2026-10-17 19:30:27,133 [INFO] Loading ckpt: /workspace/scratch/24b743f0f6b2/translator-model-cache/models/iic--SenseVoiceSmall/snapshots/master/model.pt, status: <All keys matched successfully>
+APP_MODEL_INIT_OK 16.4
+OFFICIAL_ZH_SAMPLE 5.616 '开放时间早上9点至下午5点。' SECONDS 0.48
+APP_SAMPLE_INFERENCE_OK

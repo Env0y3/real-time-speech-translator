@@ -1,0 +1,10 @@
+# Optional SenseVoice CPU runtime, validated on Linux x86_64 / CPython 3.12.
+# FIRST install CPU wheels from the official PyTorch index (see docs/MODEL_SETUP.md):
+# python -m pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+# +cpu pins deliberately prevent fallback to large CUDA-enabled PyPI wheels.
+-r requirements.txt
+torch==2.6.0+cpu
+torchaudio==2.6.0+cpu
+funasr==1.4.16
+modelscope==1.40.2
+transformers==5.20.1

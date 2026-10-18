@@ -281,7 +281,7 @@ async def sensevoice_asr_worker(
             f"[ASR SenseVoice Final {result_time}] {recognized_text} "
             f"| SenseVoice Inference Latency: "
             f"{asr_inference_latency_ms:.0f} ms "
-            f"| Speech End To Result Latency: "
+            f"| Last Detected Voice To Result (includes endpoint wait): "
             f"{speech_end_to_result_latency_ms:.0f} ms "
             f"| Endpoint Trigger To Result: "
             f"{endpoint_to_result_latency_ms:.0f} ms"

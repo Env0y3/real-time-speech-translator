@@ -29,7 +29,11 @@ from core.audio_devices import (
     build_audio_routing_plan,
     format_device,
 )
-from core.performance_logger import PerformanceLogger
+from core.performance_logger import (
+    PerformanceLogger,
+    calculate_trace_latencies,
+    elapsed_ms,
+)
 from core.tts import speak_sync, tts_worker
 
 
@@ -478,6 +482,7 @@ async def _global_playback_worker(
                 # write() 开始时间是软件层近似值，不冒充硬件首帧时间。
                 metrics.first_playback_at = write_started_at
                 state.trace["first_playback_at"] = write_started_at
+                state.trace["first_playback_measurement"] = "output_stream_write_start"
                 metrics.tts_queue_wait_ms = (
                     write_started_at - message["audio_received_at"]
                 ) * 1000
@@ -516,7 +521,12 @@ async def _global_playback_worker(
                     message["text"],
                 )
                 metrics.first_playback_at = (
-                    first_audio_started_at or fallback_started_at
+                    first_audio_started_at
+                    if first_audio_started_at is not None else fallback_started_at
+                )
+                state.trace["first_playback_measurement"] = (
+                    "pyttsx3_started_word" if first_audio_started_at is not None
+                    else "pyttsx3_invocation_start"
                 )
                 state.trace["first_playback_at"] = (
                     metrics.first_playback_at
@@ -642,13 +652,8 @@ async def _drain_failed_sentence(
 
 
 def _elapsed_ms(start_at, end_at) -> float | None:
-    """只用 perf_counter 同源时间点计算延迟；缺失值返回 None。"""
-    if not isinstance(start_at, (int, float)) or not isinstance(
-        end_at,
-        (int, float),
-    ):
-        return None
-    return (end_at - start_at) * 1000
+    """Compatibility wrapper for the shared interval validator."""
+    return elapsed_ms(start_at, end_at)
 
 
 def _format_metric(value: float | None) -> str:
@@ -699,42 +704,20 @@ async def _print_and_log_session(
     first_audio_received_at = trace.get("tts_first_audio_received_at")
     first_playback_at = trace.get("first_playback_at")
 
-    speech_end_to_asr_result_ms = _elapsed_ms(
-        endpoint_triggered_at,
-        asr_result_at,
-    )
-    speech_end_to_translation_first_token_ms = _elapsed_ms(
-        endpoint_triggered_at,
-        translation_first_token_at,
-    )
-    speech_end_to_translation_first_segment_ms = _elapsed_ms(
-        endpoint_triggered_at,
-        translation_first_segment_at,
-    )
-    speech_end_to_tts_first_audio_ms = _elapsed_ms(
-        endpoint_triggered_at,
-        first_audio_received_at,
-    )
-    speech_end_to_first_playback_ms = _elapsed_ms(
-        endpoint_triggered_at,
-        first_playback_at,
-    )
-    last_voice_to_first_playback_ms = _elapsed_ms(
-        last_voice_at,
-        first_playback_at,
-    )
-    endpoint_wait_ms = _elapsed_ms(
-        last_voice_at,
-        endpoint_triggered_at,
-    )
-    translation_after_asr_ms = _elapsed_ms(
-        asr_result_at,
-        translation_first_segment_at,
-    )
-    tts_after_first_segment_ms = _elapsed_ms(
-        translation_first_segment_at,
-        first_audio_received_at,
-    )
+    latencies = calculate_trace_latencies(trace)
+    speech_end_to_asr_result_ms = latencies["speech_end_to_asr_result_ms"]
+    speech_end_to_translation_first_token_ms = latencies[
+        "speech_end_to_translation_first_token_ms"
+    ]
+    speech_end_to_translation_first_segment_ms = latencies[
+        "speech_end_to_translation_first_segment_ms"
+    ]
+    speech_end_to_tts_first_audio_ms = latencies["speech_end_to_tts_first_audio_ms"]
+    speech_end_to_first_playback_ms = latencies["speech_end_to_first_playback_ms"]
+    last_voice_to_first_playback_ms = latencies["last_voice_to_first_playback_ms"]
+    endpoint_wait_ms = latencies["endpoint_wait_ms"]
+    translation_after_asr_ms = latencies["translation_after_asr_ms"]
+    tts_after_first_segment_ms = latencies["tts_after_first_segment_ms"]
 
     print(f"Audio Chunk Count: {metrics.audio_chunk_count}")
     print(f"Total Audio Bytes: {metrics.total_audio_bytes}")
@@ -764,25 +747,26 @@ async def _print_and_log_session(
     print(f"Trace ID: {trace.get('trace_id', 'N/A')}")
     print(f"Sentence ID: {state.sentence_id}")
     print(
-        "Speech End → ASR Result: "
+        "Endpoint Trigger → ASR Result: "
         f"{_format_metric(speech_end_to_asr_result_ms)}"
     )
     print(
-        "Speech End → First Translation Segment: "
+        "Endpoint Trigger → First Translation Segment: "
         f"{_format_metric(speech_end_to_translation_first_segment_ms)}"
     )
     print(
-        "Speech End → First TTS Audio: "
+        "Endpoint Trigger → First TTS Audio: "
         f"{_format_metric(speech_end_to_tts_first_audio_ms)}"
     )
     print(
-        "Speech End → First English Playback: "
+        "Endpoint Trigger → First Software Playback: "
         f"{_format_metric(speech_end_to_first_playback_ms)}"
     )
     print(
-        "Last Voice → First English Playback: "
+        "Last Detected Voice → First Software Playback (includes endpoint wait): "
         f"{_format_metric(last_voice_to_first_playback_ms)}"
     )
+    print("Playback timing is a software estimate, not measured speaker output.")
     print("Breakdown:")
     print(f"Endpoint Wait: {_format_metric(endpoint_wait_ms)}")
     print(f"ASR: {_format_metric(speech_end_to_asr_result_ms)}")
@@ -827,6 +811,14 @@ async def _print_and_log_session(
     await performance_logger.log(
         {
             "event": "trace_summary",
+            "latency_semantics_version": 2,
+            "first_playback_measurement": trace.get(
+                "first_playback_measurement", "unknown"
+            ),
+            "first_playback_is_acoustic": False,
+            "fallback_provider": state.fallback_provider,
+            "partial_failure": state.partial_failure,
+            "playback_error": metrics.playback_error,
             "trace_id": trace.get("trace_id"),
             "sentence_id": state.sentence_id,
             "raw_text": trace.get("raw_text"),
@@ -895,6 +887,17 @@ async def _print_and_log_session(
             "tts_queue_wait_ms": metrics.tts_queue_wait_ms,
         }
     )
+    if metrics.playback_error:
+        performance_logger.emit_event(
+            {
+                "type": "playback_error",
+                "status": "Error",
+                "error_category": "audio_output_failed",
+                "message": "Audio playback failed. Check the selected output device.",
+                "sentence_id": state.sentence_id,
+            }
+        )
+        return
     performance_logger.emit_event(
         {
             "type": "status",

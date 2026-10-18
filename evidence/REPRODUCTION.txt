@@ -1,0 +1,14 @@
+Environment: Debian GNU/Linux 13 (trixie), x86_64, CPython 3.12.14.
+Fresh venvs: python -m venv /tmp/translator-core-venv; python -m venv /tmp/translator-no-gui-venv
+Core: /tmp/translator-no-gui-venv/bin/pip install -r requirements.txt
+GUI: /tmp/translator-core-venv/bin/pip install -r requirements-gui.txt
+Linux system dependency: no sudo or apt package index available. Official Debian libportaudio2_19.7.0-1+b1_amd64.deb downloaded from deb.debian.org/debian/pool/main/p/portaudio19/, extracted with dpkg-deb -x to /tmp/translator-system-libs/root. libportaudio.so symlink points at libportaudio.so.2 in the same local lib directory. No system/network security setting changed.
+Tests with LD_LIBRARY_PATH=/tmp/translator-system-libs/root/usr/lib/x86_64-linux-gnu:
+QT_QPA_PLATFORM=offscreen XDG_CACHE_HOME=/tmp/translator-fontcache /tmp/translator-core-venv/bin/python scripts/run_tests.py evidence/gui-results.json
+/tmp/translator-no-gui-venv/bin/python scripts/run_tests.py evidence/no-gui-results.json
+CLI: /tmp/translator-core-venv/bin/python main.py </dev/null (exit0, menu and clean EOF)
+Actual GUI: QApplication + MainWindow(auto_initialize default True), show(), 1-second event loop, screenshot and close. No model/ASR patch. Core+GUI-only environment lacks FunASR, so real model initialization reports model_load_failed; Start disabled. It is an actual Qt offscreen startup/error screen, not a real microphone/service pass.
+Real sounddevice.query_devices(): 0 audio devices.
+No paid external service calls, no production keys/data, no acoustic timing samples.
+Complete environment also tested: /tmp/translator-model-venv/bin/python scripts/run_tests.py evidence/full-env-results.json (same LD_LIBRARY_PATH/QT_QPA_PLATFORM).
+Actual full-model GUI: same MainWindow with unmocked InitializationThread; MODELSCOPE_HOME=/workspace/scratch/24b743f0f6b2/translator-model-cache/sdk MODELSCOPE_CACHE=/workspace/scratch/24b743f0f6b2/translator-model-cache OMP_NUM_THREADS=2 MKL_NUM_THREADS=2, model-venv Python. Poll until initializer finished, capture window, close and app.quit. Initial Start=False, final READY/Start=True, process exit0. No real audio or paid API call.

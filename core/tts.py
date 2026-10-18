@@ -86,7 +86,13 @@ async def tts_worker(
             )
         except Exception as error:
             print(f"[TTS Error] 播放失败：{type(error).__name__}")
-            continue
+            if performance_logger is not None:
+                performance_logger.emit_event({
+                    "type": "playback_error", "status": "Error",
+                    "error_category": "audio_output_failed",
+                    "message": "Local speech playback failed. Check the output device and speech engine.",
+                })
+            raise RuntimeError("Local speech playback failed") from None
 
         playback_finished_at = time.perf_counter()
         total_playback_ms = (
