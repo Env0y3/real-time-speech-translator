@@ -50,6 +50,7 @@ test_start_stop_and_restart_keep_ui_responsive (test_gui.MainWindowTests.test_st
 test_startup_is_loading_and_start_is_disabled (test_gui.MainWindowTests.test_startup_is_loading_and_start_is_disabled) ... skipped 'PySide6 is not installed'
 test_text_history_is_limited (test_gui.MainWindowTests.test_text_history_is_limited) ... skipped 'PySide6 is not installed'
 test_virtual_cable_absence_is_nonfatal_notice (test_gui.MainWindowTests.test_virtual_cable_absence_is_nonfatal_notice) ... skipped 'PySide6 is not installed'
+test_zero_audio_devices_is_explicit_and_blocks_runtime (test_gui.MainWindowTests.test_zero_audio_devices_is_explicit_and_blocks_runtime) ... skipped 'PySide6 is not installed'
 test_broken_qt_import_is_not_hidden (test_gui_collection.GuiCollectionTests.test_broken_qt_import_is_not_hidden) ... ok
 test_missing_pyside_collects_skipped_class_without_annotation_error (test_gui_collection.GuiCollectionTests.test_missing_pyside_collects_skipped_class_without_annotation_error) ... ok
 test_unrelated_missing_module_is_not_hidden (test_gui_collection.GuiCollectionTests.test_unrelated_missing_module_is_not_hidden) ... ok
@@ -103,9 +104,9 @@ test_empty_stream_does_not_fallback_or_reach_tts (test_translation_guards.Transl
 test_punctuation_input_never_calls_deepseek (test_translation_guards.TranslationWorkerGuardTests.test_punctuation_input_never_calls_deepseek) ... ok
 
 ----------------------------------------------------------------------
-Ran 80 tests in 0.066s
+Ran 81 tests in 0.052s
 
-OK (skipped=23)
+OK (skipped=24)
 [TTS Error] 播放失败：RuntimeError
 
 [Input Guard]
@@ -128,7 +129,7 @@ Streaming Translation 已就绪：DeepSeek deepseek-v4-flash
 
 [Streaming Translation Request]
 中文：你好
-Translation Request Start: 19:31:25
+Translation Request Start: 19:38:27
 [Streaming Translation Error] 模型返回了空流
 Streaming Translation Worker 已结束
 

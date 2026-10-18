@@ -66,3 +66,5 @@ python scripts/run_tests.py test-results.json
 ### 安全限制
 
 设备名称重复时不能可靠识别重插后的设备，本轮保守地要求重选唯一名称/使用系统默认，不信任历史索引。pyttsx3 直接模式只支持系统默认输出且关闭本地监听；选择显式输出或开启监听会明确拒绝启动，避免配置被静默忽略。ElevenLabs 路由支持显式设备。云合成回退到 pyttsx3 时测量点可能是词回调或调用起点，因此界面统称“首次软件播放”，不能统一称为 PCM 写入或声学出声。
+
+模型准备后可运行 python scripts/smoke_desktop.py --screenshot desktop-smoke.png 检查真实Qt窗口和模型初始化，再自动关闭；它不会开始翻译或调用收费服务。无麦克风时会清楚提示，但模型初始化可独立成功。

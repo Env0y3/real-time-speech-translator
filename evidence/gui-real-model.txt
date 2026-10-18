@@ -1,15 +1,14 @@
-initial_start_enabled= False
-2026-10-17 19:32:19,020 [INFO] download models from model hub: ms
-2026-10-17 19:32:29,125 | INFO    | modelscope_hub.download | Downloading 20 files from iic/SenseVoiceSmall@master
+{"initial_start_enabled": false}
+2026-10-17 19:37:43,055 [INFO] download models from model hub: ms
+2026-10-17 19:37:55,205 | INFO    | modelscope_hub.download | Downloading 20 files from iic/SenseVoiceSmall@master
 funasr version: 1.4.16.
-Downloading:   0%|          | 0/20 [00:00<?, ?file/s]Downloading: 100%|██████████| 20/20 [00:00<00:00, 31.03file/s]Downloading: 100%|██████████| 20/20 [00:00<00:00, 31.02file/s]
-2026-10-17 19:32:29,796 [WARNING] trust_remote_code: False
-2026-10-17 19:32:30,969 [INFO] Loading pretrained params from /workspace/scratch/24b743f0f6b2/translator-model-cache/models/iic--SenseVoiceSmall/snapshots/master/model.pt
-2026-10-17 19:32:30,973 [INFO] ckpt: /workspace/scratch/24b743f0f6b2/translator-model-cache/models/iic--SenseVoiceSmall/snapshots/master/model.pt
-2026-10-17 19:32:31,556 [INFO] scope_map: ['module.', 'None']
-2026-10-17 19:32:31,557 [INFO] excludes: None
-2026-10-17 19:32:31,613 [INFO] Loading ckpt: /workspace/scratch/24b743f0f6b2/translator-model-cache/models/iic--SenseVoiceSmall/snapshots/master/model.pt, status: <All keys matched successfully>
-visible= True status= READY start_enabled= True
-error_key= None
+Downloading:   0%|          | 0/20 [00:00<?, ?file/s]Downloading: 100%|██████████| 20/20 [00:00<00:00, 30.44file/s]Downloading: 100%|██████████| 20/20 [00:00<00:00, 30.43file/s]
+2026-10-17 19:37:55,893 [WARNING] trust_remote_code: False
+2026-10-17 19:37:57,117 [INFO] Loading pretrained params from /workspace/scratch/24b743f0f6b2/translator-model-cache/models/iic--SenseVoiceSmall/snapshots/master/model.pt
+2026-10-17 19:37:57,123 [INFO] ckpt: /workspace/scratch/24b743f0f6b2/translator-model-cache/models/iic--SenseVoiceSmall/snapshots/master/model.pt
+2026-10-17 19:37:58,430 [INFO] scope_map: ['module.', 'None']
+2026-10-17 19:37:58,430 [INFO] excludes: None
+2026-10-17 19:37:58,498 [INFO] Loading ckpt: /workspace/scratch/24b743f0f6b2/translator-model-cache/models/iic--SenseVoiceSmall/snapshots/master/model.pt, status: <All keys matched successfully>
+{"visible": true, "status": "READY", "start_enabled": true, "no_audio_devices": true, "model_ready": true, "error_key": null, "elapsed_seconds": 21.29}
 
 EXIT=0

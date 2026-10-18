@@ -1,7 +1,7 @@
 {
-  "planned": 80,
-  "executed": 80,
-  "passed": 80,
+  "planned": 81,
+  "executed": 81,
+  "passed": 81,
   "assertion_failures": 0,
   "module_import_errors": 0,
   "other_errors": 0,

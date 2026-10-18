@@ -1,11 +1,11 @@
 {
-  "planned": 80,
-  "executed": 80,
+  "planned": 81,
+  "executed": 81,
   "passed": 57,
   "assertion_failures": 0,
   "module_import_errors": 0,
   "other_errors": 0,
-  "skipped": 23,
+  "skipped": 24,
   "not_run": 0,
   "complete": true,
   "skipped_tests": [
@@ -99,6 +99,10 @@
     },
     {
       "test": "test_gui.MainWindowTests.test_virtual_cable_absence_is_nonfatal_notice",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_zero_audio_devices_is_explicit_and_blocks_runtime",
       "reason": "PySide6 is not installed"
     }
   ]

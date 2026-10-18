@@ -467,7 +467,11 @@ class MainWindow(QMainWindow):
 
         try:
             devices = list_audio_devices()
-            self._devices_available = True
+            self._devices_available = bool(devices)
+            if devices:
+                self._notice_keys.discard("no_audio_devices")
+            else:
+                self._notice_keys.add("no_audio_devices")
             input_devices = [d for d in devices if d.max_input_channels > 0]
             output_devices = [d for d in devices if d.max_output_channels > 0]
             input_restored = self._populate_device_combo(
@@ -660,6 +664,8 @@ class MainWindow(QMainWindow):
 
     def _runtime_options(self) -> NormalPipelineOptions:
         if not self._devices_available:
+            if "no_audio_devices" in self._notice_keys:
+                raise AudioRoutingError(tr("no_audio_devices", self.language))
             raise AudioRoutingError(tr("device_refresh_failed", self.language, detail=""))
         required = [self.input_combo, self.output_combo]
         if self.monitor_checkbox.isChecked():

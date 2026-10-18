@@ -15,7 +15,7 @@
 
 ## 测试结果与边界
 
-最终精确结果见 evidence/gui-results.json、evidence/no-gui-results.json。本轮完整GUI离线回归80项通过；无GUI依赖环境80项完整收集，57通过、23跳过。断言失败0、模块导入错误0、其他错误0、未运行0；均正常结束，无中断。界面生命周期测试使用替身，不计真实音频/服务验收。中途新增测试期间的运行不作为最终成绩。
+最终精确结果见 evidence/gui-results.json、evidence/no-gui-results.json。本轮完整GUI离线回归81项通过；无GUI依赖环境81项完整收集，57通过、24跳过。断言失败0、模块导入错误0、其他错误0、未运行0；均正常结束，无中断。界面生命周期测试使用替身，不计真实音频/服务验收。中途新增测试期间的运行不作为最终成绩。
 
 官方模型真实初始化、预录5.616秒中文样本识别通过。详见 MODEL_SETUP.md；单样本推理时间只是该环境可运行记录，不是本轮整体翻译延迟指标。另1秒合成静音识别出“嗯。”，保留为模型静音幻觉风险，不能称所有噪声输入可靠。
 
@@ -25,4 +25,6 @@
 
 在有真实麦克风/耳机的Windows电脑上按README和MODEL_SETUP安装，使用已有获授权服务密钥和预算，执行DESKTOP_ACCEPTANCE清单。虚拟声卡验收需要已安装的虚拟设备，不需新购云资源。记录当前完整提交、设备、配置、样本量和失败样本后再评价真实稳定性与延迟。
 
-完整core+GUI+CPU模型环境另跑80项全部通过，pip check无冲突。实际MainWindow（不替换初始化器）在Qt offscreen下由开始按钮禁用→真实SenseVoice加载完成→READY/开始按钮启用，窗口真实可见，截图见evidence/gui-real-model-ready.png，关闭后进程退出码0。API未配置仍不能启动付费流程；这不代表音频设备或服务已验收。
+完整core+GUI+CPU模型环境另跑81项全部通过，pip check无冲突。实际MainWindow（不替换初始化器）在Qt offscreen下由开始按钮禁用→真实SenseVoice加载完成→READY/开始按钮启用，窗口真实可见，截图见evidence/gui-real-model-ready.png，关闭后进程退出码0。API未配置仍不能启动付费流程；这不代表音频设备或服务已验收。
+
+零设备真实启动：窗口明确显示没有任何音频设备，模型仍可独立加载到READY；开始前路由阻断，不伪造可用麦克风。窗口关闭和进程退出正常。可复现命令：python scripts/smoke_desktop.py --screenshot desktop-smoke.png（需要模型，首次可下载；不启动翻译服务）。

@@ -67,6 +67,14 @@ class MainWindowTests(unittest.TestCase):
         self.assertFalse(self.window.start_button.isEnabled())
         self.assertIn("初始化失败", self.window.startup_detail_label.text())
 
+    def test_zero_audio_devices_is_explicit_and_blocks_runtime(self):
+        self.devices = []
+        self.window.refresh_devices()
+        self.assertFalse(self.window._devices_available)
+        self.assertIn("no_audio_devices", self.window._notice_keys)
+        with self.assertRaisesRegex(AudioRoutingError, "没有检测到任何音频设备"):
+            self.window._runtime_options()
+
     def test_startup_is_loading_and_start_is_disabled(self) -> None:
         self.assertEqual(self.window._status, "LOADING")
         self.assertFalse(self.window.start_button.isEnabled())
