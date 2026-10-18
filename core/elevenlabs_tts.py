@@ -44,6 +44,10 @@ class ElevenLabsTTSError(Exception):
     """一次 ElevenLabs 句级 TTS Session（会话）无法继续。"""
 
 
+class _PlaybackStopped(ElevenLabsTTSError):
+    """A reported playback failure must cancel pending remote work."""
+
+
 @dataclass
 class SentenceMetrics:
     """保存一句英文在 ElevenLabs 中的时间点与音频计数。"""
@@ -73,6 +77,10 @@ class SentenceState:
     pipeline_finished: bool = False
     partial_failure: bool = False
     fallback_provider: str | None = None
+    fallback_status: str | None = None
+    service_failure: bool = False
+    error_category: str | None = None
+    error_emitted: bool = False
     trace: dict = field(default_factory=dict)
 
     @property
@@ -91,6 +99,67 @@ class AudioOutputStreams:
     translation: sd.OutputStream
     monitor: sd.OutputStream | None = None
     monitor_label: str | None = None
+
+
+_FAILURE_MESSAGES = {
+    "audio_output_failed": "Audio playback failed. Check the selected output device.",
+    "tts_service_failed": "Speech synthesis failed before audio was available. Check the speech service and connection.",
+    "tts_partial_failed": "Speech synthesis was interrupted after partial audio. The sentence was not replayed.",
+}
+
+
+def _report_failure(
+    performance_logger: PerformanceLogger | None,
+    state: SentenceState,
+    category: str,
+    playback_failed: asyncio.Event | None = None,
+) -> None:
+    """Report at the failing operation, before network or queue cleanup."""
+    state.error_category = state.error_category or category
+    if playback_failed is not None:
+        playback_failed.set()
+    if state.error_emitted:
+        return
+    state.error_emitted = True
+    if performance_logger is not None:
+        performance_logger.emit_event({
+            "type": "playback_error", "status": "Error", "request_stop": True,
+            "error_category": state.error_category,
+            "message": _FAILURE_MESSAGES[state.error_category],
+            "sentence_id": state.sentence_id,
+            "trace_id": state.trace.get("trace_id"),
+        })
+
+
+def _report_fallback(
+    performance_logger: PerformanceLogger | None,
+    state: SentenceState,
+    status: str,
+) -> None:
+    state.fallback_status = status
+    if performance_logger is not None:
+        performance_logger.emit_event({
+            "type": "tts_fallback", "fallback_provider": "pyttsx3",
+            "fallback_status": status, "failure_category": "tts_service_failed",
+            "sentence_id": state.sentence_id,
+            "trace_id": state.trace.get("trace_id"),
+        })
+
+
+async def _await_unless_playback_failed(awaitable, playback_failed: asyncio.Event):
+    """Do not wait for remote final/another translation after output failure."""
+    operation = asyncio.ensure_future(awaitable)
+    failure = asyncio.create_task(playback_failed.wait())
+    try:
+        await asyncio.wait((operation, failure), return_when=asyncio.FIRST_COMPLETED)
+        if playback_failed.is_set():
+            raise _PlaybackStopped(_FAILURE_MESSAGES["audio_output_failed"])
+        return await operation
+    finally:
+        for task in (operation, failure):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(operation, failure, return_exceptions=True)
 
 
 def _websocket_url() -> str:
@@ -403,11 +472,13 @@ async def _receive_audio_chunks(
     if not received_final:
         raise ElevenLabsTTSError("Session ended without is_final")
 
+
 async def _global_playback_worker(
     audio_playback_queue: asyncio.Queue,
     output_streams: AudioOutputStreams,
     sentence_states: dict[int, SentenceState],
     performance_logger: PerformanceLogger | None,
+    playback_failed: asyncio.Event | None = None,
 ) -> None:
     """唯一播放 Consumer；每个 OutputStream 同一时间只有一次 write。"""
     previous_sentence_finished_at = None
@@ -450,11 +521,17 @@ async def _global_playback_worker(
             )
 
         if message["type"] == "audio":
-            if metrics.playback_error:
+            if metrics.playback_error or (
+                playback_failed is not None and playback_failed.is_set()
+            ):
                 continue
             audio_chunk = message["audio_chunk"]
-            if len(audio_chunk) % np.dtype(np.int16).itemsize != 0:
+            frame_size = np.dtype(np.int16).itemsize * ELEVENLABS_CHANNELS
+            if len(audio_chunk) % frame_size != 0:
                 metrics.playback_error = True
+                _report_failure(
+                    performance_logger, state, "audio_output_failed", playback_failed,
+                )
                 print("[ElevenLabs Playback Error] PCM Chunk 不完整")
                 continue
 
@@ -471,6 +548,9 @@ async def _global_playback_worker(
                 )
             except Exception as error:
                 metrics.playback_error = True
+                _report_failure(
+                    performance_logger, state, "audio_output_failed", playback_failed,
+                )
                 print(
                     "[ElevenLabs Playback Error] "
                     f"{type(error).__name__}: {error}"
@@ -498,7 +578,9 @@ async def _global_playback_worker(
                     "TTS Queue Wait: "
                     f"{metrics.tts_queue_wait_ms:.0f} ms"
                 )
-                if performance_logger is not None:
+                if performance_logger is not None and not (
+                    playback_failed is not None and playback_failed.is_set()
+                ):
                     performance_logger.emit_event(
                         {
                             "type": "tts_started",
@@ -509,7 +591,10 @@ async def _global_playback_worker(
                     )
 
         elif message["type"] == "pyttsx3_fallback":
+            if playback_failed is not None and playback_failed.is_set():
+                continue
             state.fallback_provider = "pyttsx3"
+            _report_fallback(performance_logger, state, "started")
             fallback_started_at = time.perf_counter()
             if previous_sentence_finished_at is not None:
                 metrics.cross_sentence_gap_ms = (
@@ -531,10 +616,15 @@ async def _global_playback_worker(
                 state.trace["first_playback_at"] = (
                     metrics.first_playback_at
                 )
+                _report_fallback(performance_logger, state, "succeeded")
             except Exception as error:
                 state.fallback_provider = "pyttsx3_failed"
                 metrics.playback_error = True
                 state.partial_failure = True
+                _report_failure(
+                    performance_logger, state, "audio_output_failed", playback_failed,
+                )
+                _report_fallback(performance_logger, state, "failed")
                 print(
                     "[TTS Fallback Error] "
                     f"{type(error).__name__}"
@@ -547,7 +637,9 @@ async def _global_playback_worker(
             # 日志放到后台，不能阻塞下一句从全局播放队列开始写入。
             session_log_tasks.append(
                 asyncio.create_task(
-                    _print_and_log_session(performance_logger, state)
+                    _print_and_log_session(
+                        performance_logger, state, playback_failed,
+                    )
                 )
             )
             sentence_states.pop(sentence_id, None)
@@ -565,7 +657,9 @@ async def _global_playback_worker(
                 state.partial_failure = True
             session_log_tasks.append(
                 asyncio.create_task(
-                    _print_and_log_session(performance_logger, state)
+                    _print_and_log_session(
+                        performance_logger, state, playback_failed,
+                    )
                 )
             )
             sentence_states.pop(sentence_id, None)
@@ -663,6 +757,7 @@ def _format_metric(value: float | None) -> str:
 async def _print_and_log_session(
     performance_logger: PerformanceLogger | None,
     state: SentenceState,
+    playback_failed: asyncio.Event | None = None,
 ) -> None:
     """在本地播放结束后统一打印并记录网络与播放两组指标。"""
     metrics = state.metrics
@@ -793,6 +888,9 @@ async def _print_and_log_session(
             "tts_provider": "elevenlabs",
             "trace_id": trace.get("trace_id"),
             "fallback_provider": state.fallback_provider,
+            "fallback_status": state.fallback_status,
+            "service_failure": state.service_failure,
+            "error_category": state.error_category,
             "sentence_id": state.sentence_id,
             "segment_count": len(state.segments),
             # 保留 V11.1 字段，并新增语义更清晰的同值字段。
@@ -817,6 +915,9 @@ async def _print_and_log_session(
             ),
             "first_playback_is_acoustic": False,
             "fallback_provider": state.fallback_provider,
+            "fallback_status": state.fallback_status,
+            "service_failure": state.service_failure,
+            "error_category": state.error_category,
             "partial_failure": state.partial_failure,
             "playback_error": metrics.playback_error,
             "trace_id": trace.get("trace_id"),
@@ -887,16 +988,13 @@ async def _print_and_log_session(
             "tts_queue_wait_ms": metrics.tts_queue_wait_ms,
         }
     )
-    if metrics.playback_error:
-        performance_logger.emit_event(
-            {
-                "type": "playback_error",
-                "status": "Error",
-                "error_category": "audio_output_failed",
-                "message": "Audio playback failed. Check the selected output device.",
-                "sentence_id": state.sentence_id,
-            }
+    if metrics.playback_error or state.error_category or state.partial_failure:
+        category = state.error_category or (
+            "audio_output_failed" if metrics.playback_error else "tts_partial_failed"
         )
+        _report_failure(performance_logger, state, category, playback_failed)
+        return
+    if playback_failed is not None and playback_failed.is_set():
         return
     performance_logger.emit_event(
         {
@@ -987,6 +1085,7 @@ async def elevenlabs_tts_worker(
     audio_playback_queue = asyncio.Queue(
         maxsize=ELEVENLABS_AUDIO_QUEUE_MAXSIZE
     )
+    playback_failed = asyncio.Event()
     sentence_states: dict[int, SentenceState] = {}
     playback_task = asyncio.create_task(
         _global_playback_worker(
@@ -994,12 +1093,15 @@ async def elevenlabs_tts_worker(
             output_streams,
             sentence_states,
             performance_logger,
+            playback_failed,
         )
     )
 
     try:
         while True:
-            first_item = await translated_queue.get()
+            first_item = await _await_unless_playback_failed(
+                translated_queue.get(), playback_failed,
+            )
             if first_item is None:
                 break
             if not isinstance(first_item, dict):
@@ -1021,29 +1123,53 @@ async def elevenlabs_tts_worker(
 
             try:
                 async with asyncio.timeout(TTS_SESSION_TIMEOUT_SECONDS):
-                    await _run_sentence_session(
-                        translated_queue,
-                        audio_playback_queue,
-                        first_item,
-                        state,
-                        api_key,
-                        runtime_session_id,
+                    await _await_unless_playback_failed(
+                        _run_sentence_session(
+                            translated_queue,
+                            audio_playback_queue,
+                            first_item,
+                            state,
+                            api_key,
+                            runtime_session_id,
+                        ),
+                        playback_failed,
                     )
                 _print_network_session_summary(state)
+            except _PlaybackStopped:
+                # The playback consumer has already reported the device error.
+                # Finish its trace without waiting for the remote is_final.
+                await audio_playback_queue.put({
+                    "type": "sentence_end", "session_id": runtime_session_id,
+                    "trace_id": state.trace.get("trace_id"),
+                    "sentence_id": sentence_id,
+                })
+                raise
             except Exception as error:
                 print(
                     "[ElevenLabs TTS Error] "
                     f"{_safe_error_message(error, api_key)}"
                 )
-                try:
-                    await _drain_failed_sentence(translated_queue, state)
-                except Exception as drain_error:
-                    print(
-                        "[ElevenLabs TTS Error] Queue 清理失败："
-                        f"{type(drain_error).__name__}"
-                    )
-
+                state.service_failure = True
                 if _should_use_local_tts_fallback(state, audio_routing):
+                    try:
+                        async with asyncio.timeout(TTS_SESSION_TIMEOUT_SECONDS):
+                            await _await_unless_playback_failed(
+                                _drain_failed_sentence(translated_queue, state),
+                                playback_failed,
+                            )
+                    except _PlaybackStopped:
+                        raise
+                    except Exception:
+                        _report_failure(
+                            performance_logger, state, "tts_service_failed", playback_failed,
+                        )
+                        await audio_playback_queue.put({
+                            "type": "sentence_end", "session_id": runtime_session_id,
+                            "sentence_id": sentence_id,
+                        })
+                        raise ElevenLabsTTSError(
+                            _FAILURE_MESSAGES["tts_service_failed"]
+                        ) from None
                     print("[ElevenLabs TTS] 当前句排队回退到 pyttsx3")
                     await audio_playback_queue.put(
                         {
@@ -1055,7 +1181,13 @@ async def elevenlabs_tts_worker(
                         }
                     )
                 else:
-                    state.partial_failure = True
+                    state.partial_failure = state.metrics.audio_chunk_count > 0
+                    category = (
+                        "tts_partial_failed" if state.partial_failure
+                        else "tts_service_failed"
+                    )
+                    # Report before queue cleanup; never turn this into Listening.
+                    _report_failure(performance_logger, state, category, playback_failed)
                     if (
                         state.metrics.audio_chunk_count == 0
                         and not audio_routing.translation_uses_default
@@ -1079,13 +1211,25 @@ async def elevenlabs_tts_worker(
                             "sentence_id": sentence_id,
                         }
                     )
+                    raise ElevenLabsTTSError(_FAILURE_MESSAGES[category]) from None
 
             if state.pipeline_finished:
                 break
     finally:
         # None 只在所有句级网络 Session 都结束后关闭全局 Playback Worker。
-        await audio_playback_queue.put(None)
-        await playback_task
-        await _close_audio_output_streams(output_streams)
+        try:
+            await audio_playback_queue.put(None)
+            await playback_task
+        finally:
+            try:
+                await _close_audio_output_streams(output_streams)
+            except Exception as error:
+                # A cleanup exception must not replace the original failure.
+                if not playback_failed.is_set():
+                    raise
+                print(f"[Audio Cleanup Warning] {type(error).__name__}")
+
+    if playback_failed.is_set():
+        raise _PlaybackStopped(_FAILURE_MESSAGES["audio_output_failed"])
 
     print("[ElevenLabs TTS] 播放任务结束")

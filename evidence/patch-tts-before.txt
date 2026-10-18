@@ -1,0 +1,112 @@
+test_failed_fallback_is_fatal_and_not_listening (test_tts_failure_paths.TTSFailurePathTests.test_failed_fallback_is_fatal_and_not_listening) ... FAIL
+test_malformed_pcm_stops_without_remote_final (test_tts_failure_paths.TTSFailurePathTests.test_malformed_pcm_stops_without_remote_final) ... FAIL
+test_output_write_error_stops_without_remote_final (test_tts_failure_paths.TTSFailurePathTests.test_output_write_error_stops_without_remote_final) ... FAIL
+test_partial_audio_service_error_never_replays_sentence (test_tts_failure_paths.TTSFailurePathTests.test_partial_audio_service_error_never_replays_sentence) ... FAIL
+test_successful_default_fallback_is_recorded_separately (test_tts_failure_paths.TTSFailurePathTests.test_successful_default_fallback_is_recorded_separately) ... FAIL
+test_zero_audio_service_error_with_explicit_route_is_fatal (test_tts_failure_paths.TTSFailurePathTests.test_zero_audio_service_error_with_explicit_route_is_fatal) ... FAIL
+
+======================================================================
+FAIL: test_failed_fallback_is_fatal_and_not_listening (test_tts_failure_paths.TTSFailurePathTests.test_failed_fallback_is_fatal_and_not_listening)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/workspace/scratch/24b743f0f6b2/speech-translator-desktop/tests/test_tts_failure_paths.py", line 174, in test_failed_fallback_is_fatal_and_not_listening
+    self.assert_fatal(events, "audio_output_failed")
+  File "/workspace/scratch/24b743f0f6b2/speech-translator-desktop/tests/test_tts_failure_paths.py", line 132, in assert_fatal
+    self.assertTrue(failures[0].get("request_stop"))
+AssertionError: None is not true
+
+======================================================================
+FAIL: test_malformed_pcm_stops_without_remote_final (test_tts_failure_paths.TTSFailurePathTests.test_malformed_pcm_stops_without_remote_final)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/workspace/scratch/24b743f0f6b2/speech-translator-desktop/tests/test_tts_failure_paths.py", line 206, in test_malformed_pcm_stops_without_remote_final
+    self.assert_fatal(events, "audio_output_failed")
+  File "/workspace/scratch/24b743f0f6b2/speech-translator-desktop/tests/test_tts_failure_paths.py", line 129, in assert_fatal
+    self.assertEqual(len(failures), 1, events)
+AssertionError: 0 != 1 : []
+
+======================================================================
+FAIL: test_output_write_error_stops_without_remote_final (test_tts_failure_paths.TTSFailurePathTests.test_output_write_error_stops_without_remote_final)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/workspace/scratch/24b743f0f6b2/speech-translator-desktop/tests/test_tts_failure_paths.py", line 190, in test_output_write_error_stops_without_remote_final
+    self.assert_fatal(events, "audio_output_failed")
+  File "/workspace/scratch/24b743f0f6b2/speech-translator-desktop/tests/test_tts_failure_paths.py", line 129, in assert_fatal
+    self.assertEqual(len(failures), 1, events)
+AssertionError: 0 != 1 : []
+
+======================================================================
+FAIL: test_partial_audio_service_error_never_replays_sentence (test_tts_failure_paths.TTSFailurePathTests.test_partial_audio_service_error_never_replays_sentence)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/workspace/scratch/24b743f0f6b2/speech-translator-desktop/tests/test_tts_failure_paths.py", line 149, in test_partial_audio_service_error_never_replays_sentence
+    self.assert_fatal(events, "tts_partial_failed")
+  File "/workspace/scratch/24b743f0f6b2/speech-translator-desktop/tests/test_tts_failure_paths.py", line 129, in assert_fatal
+    self.assertEqual(len(failures), 1, events)
+AssertionError: 0 != 1 : [{'type': 'tts_started', 'status': 'Speaking', 'sentence_id': 7, 'trace_id': 'offline-7'}, {'event': 'tts_session', 'tts_provider': 'elevenlabs', 'trace_id': 'offline-7', 'fallback_provider': None, 'sentence_id': 7, 'segment_count': 1, 'first_audio_chunk_ms': 1.1354150010447484, 'network_first_audio_ms': 1.1354150010447484, 'tts_queue_wait_ms': 0.3911120002157986, 'first_playback_ms': 1.526527001260547, 'tts_session_total_ms': None, 'sentence_playback_ms': 0.0026839989004656672, 'cross_sentence_gap_ms': None, 'audio_chunk_count': 1, 'total_audio_bytes': 4, 'partial_failure': True, 'type': 'tts_session'}, {'event': 'trace_summary', 'latency_semantics_version': 2, 'first_playback_measurement': 'output_stream_write_start', 'first_playback_is_acoustic': False, 'fallback_provider': None, 'partial_failure': True, 'playback_error': False, 'trace_id': 'offline-7', 'sentence_id': 7, 'raw_text': None, 'source_text': None, 'translated_text': None, 'speech_started_at': None, 'last_voice_at': None, 'endpoint_triggered_at': None, 'asr_started_at': None, 'asr_result_at': None, 'hotword_done_at': None, 'translation_request_started_at': None, 'translation_first_token_at': None, 'translation_first_segment_at': None, 'translation_finished_at': None, 'tts_first_text_sent_at': 24127.165622735, 'tts_first_audio_received_at': 24127.165680802, 'first_playback_at': 24127.166071914, 'tts_session_finished_at': None, 'playback_finished_at': 24127.166074598, 'endpoint_wait_ms': None, 'speech_end_to_asr_result_ms': None, 'speech_end_to_translation_first_token_ms': None, 'speech_end_to_translation_first_segment_ms': None, 'speech_end_to_tts_first_audio_ms': None, 'speech_end_to_first_playback_ms': None, 'endpoint_trigger_to_first_playback_ms': None, 'last_voice_to_first_playback_ms': None, 'asr_stage_ms': None, 'translation_after_asr_ms': None, 'tts_after_first_segment_ms': None, 'playback_queue_ms': 0.3911120002157986, 'translation_ttft_ms': None, 'translation_ttfs_ms': None, 'network_first_audio_ms': 1.1354150010447484, 'tts_queue_wait_ms': 0.3911120002157986, 'type': 'trace_summary'}, {'type': 'status', 'status': 'Listening', 'sentence_id': 7}]
+
+======================================================================
+FAIL: test_successful_default_fallback_is_recorded_separately (test_tts_failure_paths.TTSFailurePathTests.test_successful_default_fallback_is_recorded_separately)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/workspace/scratch/24b743f0f6b2/speech-translator-desktop/tests/test_tts_failure_paths.py", line 162, in test_successful_default_fallback_is_recorded_separately
+    self.assertEqual([e["fallback_status"] for e in fallbacks], ["started", "succeeded"])
+AssertionError: Lists differ: [] != ['started', 'succeeded']
+
+Second list contains 2 additional elements.
+First extra element 0:
+'started'
+
+- []
++ ['started', 'succeeded']
+
+======================================================================
+FAIL: test_zero_audio_service_error_with_explicit_route_is_fatal (test_tts_failure_paths.TTSFailurePathTests.test_zero_audio_service_error_with_explicit_route_is_fatal)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/workspace/scratch/24b743f0f6b2/speech-translator-desktop/tests/test_tts_failure_paths.py", line 139, in test_zero_audio_service_error_with_explicit_route_is_fatal
+    self.assert_fatal(events, "tts_service_failed")
+  File "/workspace/scratch/24b743f0f6b2/speech-translator-desktop/tests/test_tts_failure_paths.py", line 129, in assert_fatal
+    self.assertEqual(len(failures), 1, events)
+AssertionError: 0 != 1 : [{'event': 'tts_session', 'tts_provider': 'elevenlabs', 'trace_id': 'offline-7', 'fallback_provider': None, 'sentence_id': 7, 'segment_count': 1, 'first_audio_chunk_ms': None, 'network_first_audio_ms': None, 'tts_queue_wait_ms': None, 'first_playback_ms': None, 'tts_session_total_ms': None, 'sentence_playback_ms': None, 'cross_sentence_gap_ms': None, 'audio_chunk_count': 0, 'total_audio_bytes': 0, 'partial_failure': True, 'type': 'tts_session'}, {'event': 'trace_summary', 'latency_semantics_version': 2, 'first_playback_measurement': 'unknown', 'first_playback_is_acoustic': False, 'fallback_provider': None, 'partial_failure': True, 'playback_error': False, 'trace_id': 'offline-7', 'sentence_id': 7, 'raw_text': None, 'source_text': None, 'translated_text': None, 'speech_started_at': None, 'last_voice_at': None, 'endpoint_triggered_at': None, 'asr_started_at': None, 'asr_result_at': None, 'hotword_done_at': None, 'translation_request_started_at': None, 'translation_first_token_at': None, 'translation_first_segment_at': None, 'translation_finished_at': None, 'tts_first_text_sent_at': 24127.175353833, 'tts_first_audio_received_at': None, 'first_playback_at': None, 'tts_session_finished_at': None, 'playback_finished_at': 24127.175893093, 'endpoint_wait_ms': None, 'speech_end_to_asr_result_ms': None, 'speech_end_to_translation_first_token_ms': None, 'speech_end_to_translation_first_segment_ms': None, 'speech_end_to_tts_first_audio_ms': None, 'speech_end_to_first_playback_ms': None, 'endpoint_trigger_to_first_playback_ms': None, 'last_voice_to_first_playback_ms': None, 'asr_stage_ms': None, 'translation_after_asr_ms': None, 'tts_after_first_segment_ms': None, 'playback_queue_ms': None, 'translation_ttft_ms': None, 'translation_ttfs_ms': None, 'network_first_audio_ms': None, 'tts_queue_wait_ms': None, 'type': 'trace_summary'}, {'type': 'status', 'status': 'Listening', 'sentence_id': 7}]
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.545s
+
+FAILED (failures=6)

@@ -1,0 +1,20 @@
+{
+  "source_sha256": "7b9d9edb83138fa25c52e14e9e8b15b7c10dc8224afb21fc58938a71e2c359a5",
+  "python": "3.12.14",
+  "platform": "Linux-6.18.55-x86_64-with-glibc2.41",
+  "commands": [
+    {
+      "environment": "core+GUI",
+      "command": "QT_QPA_PLATFORM=offscreen LD_LIBRARY_PATH=/tmp/translator-system-libs/root/usr/lib/x86_64-linux-gnu /tmp/translator-core-venv/bin/python scripts/run_tests.py evidence/patch-full-gui-results.json",
+      "exit_code": 0
+    },
+    {
+      "environment": "without GUI",
+      "command": "LD_LIBRARY_PATH=/tmp/translator-system-libs/root/usr/lib/x86_64-linux-gnu /tmp/translator-no-gui-venv/bin/python scripts/run_tests.py evidence/patch-full-no-gui-results.json",
+      "exit_code": 0
+    }
+  ],
+  "network_services_used": false,
+  "physical_audio_devices_used": false,
+  "interruptions": 0
+}

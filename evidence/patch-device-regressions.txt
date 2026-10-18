@@ -1,0 +1,92 @@
+test_close_while_running_requests_graceful_stop (test_gui.MainWindowTests.test_close_while_running_requests_graceful_stop) ... Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+ok
+test_device_lists_filter_by_channel_direction (test_gui.MainWindowTests.test_device_lists_filter_by_channel_direction) ... ok
+test_device_selection_is_saved_and_restored_by_name (test_gui.MainWindowTests.test_device_selection_is_saved_and_restored_by_name) ... ok
+test_explicit_config_index_is_resolved_and_saved_with_name (test_gui.MainWindowTests.test_explicit_config_index_is_resolved_and_saved_with_name) ... ok
+test_failed_initial_enumeration_preserves_saved_identity (test_gui.MainWindowTests.test_failed_initial_enumeration_preserves_saved_identity) ... ok
+test_failed_refresh_blocks_stale_routes (test_gui.MainWindowTests.test_failed_refresh_blocks_stale_routes) ... ok
+test_initialization_error_does_not_keep_loading_message (test_gui.MainWindowTests.test_initialization_error_does_not_keep_loading_message) ... ok
+test_language_switch_updates_ui_and_is_persisted (test_gui.MainWindowTests.test_language_switch_updates_ui_and_is_persisted) ... ok
+test_latency_shows_both_boundaries_and_write_approximation (test_gui.MainWindowTests.test_latency_shows_both_boundaries_and_write_approximation) ... ok
+test_missing_api_key_is_localized_without_starting (test_gui.MainWindowTests.test_missing_api_key_is_localized_without_starting) ... ok
+test_missing_monitor_only_blocks_when_enabled (test_gui.MainWindowTests.test_missing_monitor_only_blocks_when_enabled) ... ok
+test_missing_saved_device_stays_unavailable_without_crashing (test_gui.MainWindowTests.test_missing_saved_device_stays_unavailable_without_crashing) ... ok
+test_missing_translation_output_blocks_even_with_monitor_disabled (test_gui.MainWindowTests.test_missing_translation_output_blocks_even_with_monitor_disabled) ... ok
+test_monitor_dropdown_tracks_checkbox (test_gui.MainWindowTests.test_monitor_dropdown_tracks_checkbox) ... ok
+test_persisted_index_only_requires_reselection (test_gui.MainWindowTests.test_persisted_index_only_requires_reselection) ... ok
+test_pipeline_events_update_text_and_trace_latency (test_gui.MainWindowTests.test_pipeline_events_update_text_and_trace_latency) ... ok
+test_playback_error_stops_worker_and_preserves_error_status (test_gui.MainWindowTests.test_playback_error_stops_worker_and_preserves_error_status) ... ok
+test_real_initialization_signal_enables_start (test_gui.MainWindowTests.test_real_initialization_signal_enables_start) ... ok
+test_reused_index_does_not_restore_missing_name_and_reselection_saves (test_gui.MainWindowTests.test_reused_index_does_not_restore_missing_name_and_reselection_saves) ... ok
+test_start_stop_and_restart_keep_ui_responsive (test_gui.MainWindowTests.test_start_stop_and_restart_keep_ui_responsive) ... ok
+test_startup_is_loading_and_start_is_disabled (test_gui.MainWindowTests.test_startup_is_loading_and_start_is_disabled) ... ok
+test_text_history_is_limited (test_gui.MainWindowTests.test_text_history_is_limited) ... ok
+test_virtual_cable_absence_is_nonfatal_notice (test_gui.MainWindowTests.test_virtual_cable_absence_is_nonfatal_notice) ... ok
+test_zero_audio_devices_is_explicit_and_blocks_runtime (test_gui.MainWindowTests.test_zero_audio_devices_is_explicit_and_blocks_runtime) ... ok
+test_broken_qt_import_is_not_hidden (test_gui_collection.GuiCollectionTests.test_broken_qt_import_is_not_hidden) ... ok
+test_missing_pyside_collects_skipped_class_without_annotation_error (test_gui_collection.GuiCollectionTests.test_missing_pyside_collects_skipped_class_without_annotation_error) ... ok
+test_unrelated_missing_module_is_not_hidden (test_gui_collection.GuiCollectionTests.test_unrelated_missing_module_is_not_hidden) ... ok
+test_changed_device_properties_invalidate_duplicate_choice (test_gui_device_selection.CurrentDeviceSelectionTests.test_changed_device_properties_invalidate_duplicate_choice) ... ok
+test_device_changes_fail_closed_until_explicit_reselection (test_gui_device_selection.CurrentDeviceSelectionTests.test_device_changes_fail_closed_until_explicit_reselection) ... ok
+test_explicit_duplicate_input_and_monitor_survive_repeated_refresh (test_gui_device_selection.CurrentDeviceSelectionTests.test_explicit_duplicate_input_and_monitor_survive_repeated_refresh) ... ok
+test_explicit_duplicate_output_survives_unchanged_prestart_refresh (test_gui_device_selection.CurrentDeviceSelectionTests.test_explicit_duplicate_output_survives_unchanged_prestart_refresh) ... ok
+test_failed_enumeration_invalidates_duplicate_choice (test_gui_device_selection.CurrentDeviceSelectionTests.test_failed_enumeration_invalidates_duplicate_choice) ... ok
+test_historical_duplicate_can_be_explicitly_reselected_then_started (test_gui_device_selection.CurrentDeviceSelectionTests.test_historical_duplicate_can_be_explicitly_reselected_then_started) ... ok
+test_historical_duplicate_is_unavailable_even_at_saved_index (test_gui_device_selection.CurrentDeviceSelectionTests.test_historical_duplicate_is_unavailable_even_at_saved_index) ... ok
+test_live_selection_proof_is_not_persisted (test_gui_device_selection.CurrentDeviceSelectionTests.test_live_selection_proof_is_not_persisted) ... ok
+test_remaining_same_name_peer_is_not_an_automatic_replacement (test_gui_device_selection.CurrentDeviceSelectionTests.test_remaining_same_name_peer_is_not_an_automatic_replacement) ... ok
+test_system_default_is_explicit_recovery_after_snapshot_changes (test_gui_device_selection.CurrentDeviceSelectionTests.test_system_default_is_explicit_recovery_after_snapshot_changes) ... ok
+
+----------------------------------------------------------------------
+Ran 37 tests in 0.786s
+
+OK
+test_input_device_selection_reuses_shared_device_list (test_audio_devices.AudioDeviceTests.test_input_device_selection_reuses_shared_device_list) ... ok
+test_input_only_device_is_rejected (test_audio_devices.AudioDeviceTests.test_input_only_device_is_rejected) ... ok
+test_integer_and_unique_name_selection (test_audio_devices.AudioDeviceTests.test_integer_and_unique_name_selection) ... ok
+test_invalid_device_id_is_rejected (test_audio_devices.AudioDeviceTests.test_invalid_device_id_is_rejected) ... ok
+test_invalid_monitor_is_disabled_without_affecting_primary (test_audio_devices.AudioDeviceTests.test_invalid_monitor_is_disabled_without_affecting_primary) ... ok
+test_list_audio_devices_exposes_required_fields (test_audio_devices.AudioDeviceTests.test_list_audio_devices_exposes_required_fields) ... ok
+test_output_only_device_is_rejected_as_input (test_audio_devices.AudioDeviceTests.test_output_only_device_is_rejected_as_input) ... ok
+test_pcm_settings_are_checked (test_audio_devices.AudioDeviceTests.test_pcm_settings_are_checked) ... ok
+test_duplicate_name_is_ambiguous_even_at_old_index (test_audio_devices.SavedDeviceTests.test_duplicate_name_is_ambiguous_even_at_old_index) ... ok
+test_explicit_current_config_index_can_select_device (test_audio_devices.SavedDeviceTests.test_explicit_current_config_index_can_select_device) ... ok
+test_legacy_index_only_selection_requires_reselection (test_audio_devices.SavedDeviceTests.test_legacy_index_only_selection_requires_reselection) ... ok
+test_missing_name_never_uses_recycled_index (test_audio_devices.SavedDeviceTests.test_missing_name_never_uses_recycled_index) ... ok
+test_name_does_not_partially_match_another_device (test_audio_devices.SavedDeviceTests.test_name_does_not_partially_match_another_device) ... ok
+test_name_wins_when_index_changes (test_audio_devices.SavedDeviceTests.test_name_wins_when_index_changes) ... ok
+test_safe_default_does_not_depend_on_machine_index (test_audio_devices.SavedDeviceTests.test_safe_default_does_not_depend_on_machine_index) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 0.007s
+
+OK

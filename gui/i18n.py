@@ -20,6 +20,8 @@ TRANSLATIONS = {
         "start_translation": "开始翻译",
         "stop_translation": "停止翻译",
         "system_default": "系统默认",
+        "tts_service_failed": "语音合成服务失败，已请求停止。请检查服务配置或连接后重试。",
+        "tts_partial_failed": "语音合成中途失败，音频可能只播放了部分；已请求停止，不会整句重复播报。",
         "audio_output_failed": "音频输出失败，已请求停止。请检查设备后重新选择并开始。",
         "device_unavailable": "不可用，请重新选择：{name}",
         "last_voice_first_playback": "末次语音 → 首次软件播放：{value}",
@@ -41,6 +43,7 @@ TRANSLATIONS = {
         "ready_detail": "语音识别模型已加载，可以开始翻译。",
         "virtual_device_missing": "未检测到虚拟音频设备，Discord 虚拟麦克风功能不可用。",
         "saved_input_missing": "上次选择的输入设备不可用，请重新选择。",
+        "device_reselection_required": "同名设备或设备列表发生变化，无法确认设备身份。请核对系统音频设备，重新选择当前设备后再开始。",
         "saved_output_missing": "上次选择的输出设备不可用，请重新选择。",
         "saved_monitor_missing": "上次选择的监听设备不可用，请重新选择。",
         "device_refresh_failed": "刷新音频设备失败：{detail}",
@@ -80,6 +83,8 @@ TRANSLATIONS = {
         "start_translation": "Start Translation",
         "stop_translation": "Stop Translation",
         "system_default": "System Default",
+        "tts_service_failed": "Speech synthesis failed; stop requested. Check service configuration or connection before restarting.",
+        "tts_partial_failed": "Speech synthesis failed partway; audio may be incomplete. Stop requested; the sentence will not be replayed.",
         "audio_output_failed": "Audio output failed; stop requested. Check and reselect the device before restarting.",
         "device_unavailable": "Unavailable; choose again: {name}",
         "last_voice_first_playback": "Last Voice → First Software Playback: {value}",
@@ -107,6 +112,7 @@ TRANSLATIONS = {
             "The previously selected input device is unavailable. "
             "Please select another device."
         ),
+        "device_reselection_required": "Duplicate names or a changed device list prevent identity confirmation. Check system audio devices and select the current device again before starting.",
         "saved_output_missing": (
             "The previously selected output device is unavailable. "
             "Please select another device."

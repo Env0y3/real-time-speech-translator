@@ -1,0 +1,78 @@
+test_error_callback_requests_stop_before_gui_delivery (test_failure_gui_flow.FailureGUIFlowTests.test_error_callback_requests_stop_before_gui_delivery) ... FAIL
+test_service_and_partial_errors_survive_actual_thread_cleanup (test_failure_gui_flow.FailureGUIFlowTests.test_service_and_partial_errors_survive_actual_thread_cleanup) ... Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+
+  test_service_and_partial_errors_survive_actual_thread_cleanup (test_failure_gui_flow.FailureGUIFlowTests.test_service_and_partial_errors_survive_actual_thread_cleanup) (category='tts_service_failed') ... FAIL
+  test_service_and_partial_errors_survive_actual_thread_cleanup (test_failure_gui_flow.FailureGUIFlowTests.test_service_and_partial_errors_survive_actual_thread_cleanup) (category='tts_partial_failed') ... FAIL
+
+======================================================================
+FAIL: test_error_callback_requests_stop_before_gui_delivery (test_failure_gui_flow.FailureGUIFlowTests.test_error_callback_requests_stop_before_gui_delivery)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/24b743f0f6b2/speech-translator-desktop/tests/test_failure_gui_flow.py", line 39, in test_error_callback_requests_stop_before_gui_delivery
+    self.assertEqual(checks, [True])
+AssertionError: Lists differ: [False] != [True]
+
+First differing element 0:
+False
+True
+
+- [False]
++ [True]
+
+======================================================================
+FAIL: test_service_and_partial_errors_survive_actual_thread_cleanup (test_failure_gui_flow.FailureGUIFlowTests.test_service_and_partial_errors_survive_actual_thread_cleanup) (category='tts_service_failed')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/24b743f0f6b2/speech-translator-desktop/tests/test_failure_gui_flow.py", line 71, in test_service_and_partial_errors_survive_actual_thread_cleanup
+    self.assertEqual(window._error_key, category)
+AssertionError: 'audio_output_failed' != 'tts_service_failed'
+- audio_output_failed
++ tts_service_failed
+
+
+======================================================================
+FAIL: test_service_and_partial_errors_survive_actual_thread_cleanup (test_failure_gui_flow.FailureGUIFlowTests.test_service_and_partial_errors_survive_actual_thread_cleanup) (category='tts_partial_failed')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/24b743f0f6b2/speech-translator-desktop/tests/test_failure_gui_flow.py", line 71, in test_service_and_partial_errors_survive_actual_thread_cleanup
+    self.assertEqual(window._error_key, category)
+AssertionError: 'audio_output_failed' != 'tts_partial_failed'
+- audio_output_failed
++ tts_partial_failed
+
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.466s
+
+FAILED (failures=3)
+
+EXIT=1

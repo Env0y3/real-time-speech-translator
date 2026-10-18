@@ -1,0 +1,45 @@
+test_changed_device_properties_invalidate_duplicate_choice (test_gui_device_selection.CurrentDeviceSelectionTests.test_changed_device_properties_invalidate_duplicate_choice) ... Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+ok
+test_device_changes_fail_closed_until_explicit_reselection (test_gui_device_selection.CurrentDeviceSelectionTests.test_device_changes_fail_closed_until_explicit_reselection) ... ok
+test_explicit_duplicate_input_and_monitor_survive_repeated_refresh (test_gui_device_selection.CurrentDeviceSelectionTests.test_explicit_duplicate_input_and_monitor_survive_repeated_refresh) ... ok
+test_explicit_duplicate_output_survives_unchanged_prestart_refresh (test_gui_device_selection.CurrentDeviceSelectionTests.test_explicit_duplicate_output_survives_unchanged_prestart_refresh) ... ok
+test_failed_enumeration_invalidates_duplicate_choice (test_gui_device_selection.CurrentDeviceSelectionTests.test_failed_enumeration_invalidates_duplicate_choice) ... ok
+test_historical_duplicate_can_be_explicitly_reselected_then_started (test_gui_device_selection.CurrentDeviceSelectionTests.test_historical_duplicate_can_be_explicitly_reselected_then_started) ... ok
+test_historical_duplicate_is_unavailable_even_at_saved_index (test_gui_device_selection.CurrentDeviceSelectionTests.test_historical_duplicate_is_unavailable_even_at_saved_index) ... ok
+test_live_selection_proof_is_not_persisted (test_gui_device_selection.CurrentDeviceSelectionTests.test_live_selection_proof_is_not_persisted) ... ok
+test_remaining_same_name_peer_is_not_an_automatic_replacement (test_gui_device_selection.CurrentDeviceSelectionTests.test_remaining_same_name_peer_is_not_an_automatic_replacement) ... ok
+test_system_default_is_explicit_recovery_after_snapshot_changes (test_gui_device_selection.CurrentDeviceSelectionTests.test_system_default_is_explicit_recovery_after_snapshot_changes) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 0.461s
+
+OK

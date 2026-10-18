@@ -1,0 +1,14 @@
+test_cleanup_error_cannot_replace_service_error (test_tts_failure_paths.TTSFailurePathTests.test_cleanup_error_cannot_replace_service_error) ... ok
+test_device_error_interrupts_wait_for_next_translation (test_tts_failure_paths.TTSFailurePathTests.test_device_error_interrupts_wait_for_next_translation) ... ok
+test_failed_fallback_is_fatal_and_not_listening (test_tts_failure_paths.TTSFailurePathTests.test_failed_fallback_is_fatal_and_not_listening) ... ok
+test_malformed_pcm_stops_without_remote_final (test_tts_failure_paths.TTSFailurePathTests.test_malformed_pcm_stops_without_remote_final) ... ok
+test_output_write_error_stops_without_remote_final (test_tts_failure_paths.TTSFailurePathTests.test_output_write_error_stops_without_remote_final) ... ok
+test_partial_audio_service_error_never_replays_sentence (test_tts_failure_paths.TTSFailurePathTests.test_partial_audio_service_error_never_replays_sentence) ... ok
+test_service_error_does_not_wait_for_translation_tail (test_tts_failure_paths.TTSFailurePathTests.test_service_error_does_not_wait_for_translation_tail) ... ok
+test_successful_default_fallback_is_recorded_separately (test_tts_failure_paths.TTSFailurePathTests.test_successful_default_fallback_is_recorded_separately) ... ok
+test_zero_audio_service_error_with_explicit_route_is_fatal (test_tts_failure_paths.TTSFailurePathTests.test_zero_audio_service_error_with_explicit_route_is_fatal) ... ok
+
+----------------------------------------------------------------------
+Ran 9 tests in 0.082s
+
+OK

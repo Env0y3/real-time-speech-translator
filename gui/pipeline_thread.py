@@ -24,13 +24,19 @@ class PipelineThread(QThread):
     def request_stop(self) -> None:
         self._stop_signal.set()
 
+    def _forward_event(self, event: dict) -> None:
+        # Stop synchronously in the worker, before Qt queues GUI delivery.
+        if event.get("type") == "playback_error":
+            self.request_stop()
+        self.event_received.emit(event)
+
     def run(self) -> None:
         try:
             asyncio.run(
                 run_normal_pipeline(
                     options=self.options,
                     stop_signal=self._stop_signal,
-                    event_callback=self.event_received.emit,
+                    event_callback=self._forward_event,
                 )
             )
         except Exception as error:

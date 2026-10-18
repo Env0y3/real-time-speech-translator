@@ -49,6 +49,7 @@ from gui.settings import (
 
 DEVICE_NAME_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 UNAVAILABLE_ROLE = DEVICE_NAME_ROLE + 1
+RESELECTION_REQUIRED_ROLE = UNAVAILABLE_ROLE + 1
 MAX_TEXT_HISTORY = 100
 
 
@@ -72,6 +73,7 @@ class MainWindow(QMainWindow):
         self._close_requested = False
         self._settings_ready = False
         self._devices_available = False
+        self._device_snapshot: tuple[AudioDeviceInfo, ...] = ()
         self._status = "LOADING"
         self._startup_detail_key = "initializing"
         self._notice_keys: set[str] = set()
@@ -440,7 +442,8 @@ class MainWindow(QMainWindow):
         use_saved_settings: bool = False,
     ) -> None:
         del checked
-        if use_saved_settings or not self._devices_available:
+        use_current_selection = self._devices_available and not use_saved_settings
+        if not use_current_selection:
             input_selection = self._saved_device_selection(
                 "input_device",
                 None,
@@ -467,6 +470,12 @@ class MainWindow(QMainWindow):
 
         try:
             devices = list_audio_devices()
+            # A live choice belongs to this enumeration only. Never persist this
+            # proof or treat a matching old PortAudio index as device identity.
+            preserve_current = (
+                use_current_selection
+                and tuple(devices) == self._device_snapshot
+            )
             self._devices_available = bool(devices)
             if devices:
                 self._notice_keys.discard("no_audio_devices")
@@ -478,17 +487,25 @@ class MainWindow(QMainWindow):
                 self.input_combo,
                 input_devices,
                 input_selection,
+                preserve_current=preserve_current,
             )
             output_restored = self._populate_device_combo(
                 self.output_combo,
                 output_devices,
                 output_selection,
+                preserve_current=preserve_current,
             )
             monitor_restored = self._populate_device_combo(
                 self.monitor_combo,
                 output_devices,
                 monitor_selection,
+                preserve_current=preserve_current,
             )
+            self._device_snapshot = tuple(devices)
+            if any(combo.currentData(RESELECTION_REQUIRED_ROLE) for combo in (self.input_combo, self.output_combo, self.monitor_combo)):
+                self._notice_keys.add("device_reselection_required")
+            else:
+                self._notice_keys.discard("device_reselection_required")
             if not input_restored:
                 self._notice_keys.add("saved_input_missing")
             if not output_restored:
@@ -521,7 +538,27 @@ class MainWindow(QMainWindow):
         combo: QComboBox,
         devices: list[AudioDeviceInfo],
         selected_device,
+        *,
+        preserve_current: bool = False,
     ) -> bool:
+        selected_index, selected_name = self._selection_parts(selected_device)
+        current_choice = (
+            preserve_current
+            and not combo.currentData(UNAVAILABLE_ROLE)
+            and selected_index == combo.currentData()
+            and selected_name == combo.currentData(DEVICE_NAME_ROLE)
+        )
+        # Once a duplicate choice loses its snapshot, even one remaining
+        # same-name peer cannot prove identity. Keep the prompt until the user
+        # selects a real item again, rather than restoring that peer next time.
+        requires_reselection = bool(combo.currentData(RESELECTION_REQUIRED_ROLE))
+        if not current_choice and selected_name:
+            requires_reselection |= sum(
+                str(combo.itemData(i, DEVICE_NAME_ROLE) or "").casefold()
+                == selected_name.casefold()
+                for i in range(1, combo.count())
+                if not combo.itemData(i, UNAVAILABLE_ROLE)
+            ) > 1
         combo.blockSignals(True)
         combo.clear()
         combo.addItem(tr("system_default", self.language), None)
@@ -529,16 +566,28 @@ class MainWindow(QMainWindow):
             combo.addItem(format_device(device), device.index)
             combo.setItemData(combo.count() - 1, device.name, DEVICE_NAME_ROLE)
 
-        selected_index, selected_name = self._selection_parts(selected_device)
         restored = True
         try:
-            device = restore_saved_device(
-                devices, selected_index, selected_name,
-                allow_index=not isinstance(selected_device, dict),
-            )
+            if requires_reselection:
+                raise AudioRoutingError("Device identity requires reselection.")
+            if current_choice and selected_index is not None:
+                device = next((
+                    d for d in devices
+                    if d.index == selected_index and d.name == selected_name
+                ), None)
+                if device is None:
+                    raise AudioRoutingError("Current device is unavailable.")
+            else:
+                device = restore_saved_device(
+                    devices, selected_index, selected_name,
+                    allow_index=not isinstance(selected_device, dict),
+                )
             restored_combo_index = combo.findData(device.index) if device else 0
         except AudioRoutingError:
             restored = False
+            requires_reselection |= bool(selected_name) and sum(
+                d.name.casefold() == selected_name.casefold() for d in devices
+            ) > 1
             # Keep the original selection through refresh, save and restart.
             # This placeholder is never a runnable system-default route.
             combo.addItem(
@@ -549,6 +598,10 @@ class MainWindow(QMainWindow):
             restored_combo_index = combo.count() - 1
             combo.setItemData(restored_combo_index, selected_name, DEVICE_NAME_ROLE)
             combo.setItemData(restored_combo_index, True, UNAVAILABLE_ROLE)
+            combo.setItemData(
+                restored_combo_index, requires_reselection,
+                RESELECTION_REQUIRED_ROLE,
+            )
         combo.setCurrentIndex(restored_combo_index)
         combo.blockSignals(False)
         return restored
@@ -732,14 +785,17 @@ class MainWindow(QMainWindow):
 
     def _handle_pipeline_event(self, event: dict) -> None:
         event_type = event.get("type")
-        if self._playback_failed and event_type != "playback_error":
+        if self._playback_failed:
             # Draining worker queues may emit late Ready/Listening events.
             # Keep a failed output visible until a fresh start is requested.
             return
         if event_type == "playback_error":
             self._playback_failed = True
             self._set_status("ERROR")
-            self._show_error_key("audio_output_failed")
+            category = event.get("error_category")
+            if category not in {"audio_output_failed", "tts_service_failed", "tts_partial_failed"}:
+                category = "audio_output_failed"
+            self._show_error_key(category)
             self.stop_button.setEnabled(False)
             if self.pipeline_thread is not None:
                 self.pipeline_thread.request_stop()
@@ -771,6 +827,9 @@ class MainWindow(QMainWindow):
             )
 
     def _handle_pipeline_error(self, message: str) -> None:
+        # Preserve the first categorized playback/service failure through unwind.
+        if self._playback_failed:
+            return
         self._set_status("ERROR")
         self._show_error_key("pipeline_error", detail=message)
 

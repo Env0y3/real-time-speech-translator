@@ -1,0 +1,74 @@
+test_actual_tts_failures_reach_gui_and_stop_without_overwrite (test_failure_gui_flow.FailureGUIFlowTests.test_actual_tts_failures_reach_gui_and_stop_without_overwrite) ... Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+
+  test_actual_tts_failures_reach_gui_and_stop_without_overwrite (test_failure_gui_flow.FailureGUIFlowTests.test_actual_tts_failures_reach_gui_and_stop_without_overwrite) (category='tts_service_failed') ... FAIL
+  test_actual_tts_failures_reach_gui_and_stop_without_overwrite (test_failure_gui_flow.FailureGUIFlowTests.test_actual_tts_failures_reach_gui_and_stop_without_overwrite) (category='tts_partial_failed') ... FAIL
+  test_actual_tts_failures_reach_gui_and_stop_without_overwrite (test_failure_gui_flow.FailureGUIFlowTests.test_actual_tts_failures_reach_gui_and_stop_without_overwrite) (category='audio_output_failed') ... FAIL
+test_error_callback_requests_stop_before_gui_delivery (test_failure_gui_flow.FailureGUIFlowTests.test_error_callback_requests_stop_before_gui_delivery) ... ok
+test_service_and_partial_errors_survive_actual_thread_cleanup (test_failure_gui_flow.FailureGUIFlowTests.test_service_and_partial_errors_survive_actual_thread_cleanup) ... ok
+
+======================================================================
+FAIL: test_actual_tts_failures_reach_gui_and_stop_without_overwrite (test_failure_gui_flow.FailureGUIFlowTests.test_actual_tts_failures_reach_gui_and_stop_without_overwrite) (category='tts_service_failed')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/24b743f0f6b2/speech-translator-desktop/tests/test_failure_gui_flow.py", line 125, in test_actual_tts_failures_reach_gui_and_stop_without_overwrite
+    self.assertEqual(window._error_key, category)
+AssertionError: 'pipeline_error' != 'tts_service_failed'
+- pipeline_error
++ tts_service_failed
+
+
+======================================================================
+FAIL: test_actual_tts_failures_reach_gui_and_stop_without_overwrite (test_failure_gui_flow.FailureGUIFlowTests.test_actual_tts_failures_reach_gui_and_stop_without_overwrite) (category='tts_partial_failed')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/24b743f0f6b2/speech-translator-desktop/tests/test_failure_gui_flow.py", line 125, in test_actual_tts_failures_reach_gui_and_stop_without_overwrite
+    self.assertEqual(window._error_key, category)
+AssertionError: 'pipeline_error' != 'tts_partial_failed'
+- pipeline_error
++ tts_partial_failed
+
+
+======================================================================
+FAIL: test_actual_tts_failures_reach_gui_and_stop_without_overwrite (test_failure_gui_flow.FailureGUIFlowTests.test_actual_tts_failures_reach_gui_and_stop_without_overwrite) (category='audio_output_failed')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/24b743f0f6b2/speech-translator-desktop/tests/test_failure_gui_flow.py", line 125, in test_actual_tts_failures_reach_gui_and_stop_without_overwrite
+    self.assertEqual(window._error_key, category)
+AssertionError: 'pipeline_error' != 'audio_output_failed'
+- pipeline_error
++ audio_output_failed
+
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.866s
+
+FAILED (failures=3)

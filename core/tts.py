@@ -89,6 +89,7 @@ async def tts_worker(
             if performance_logger is not None:
                 performance_logger.emit_event({
                     "type": "playback_error", "status": "Error",
+                    "request_stop": True,
                     "error_category": "audio_output_failed",
                     "message": "Local speech playback failed. Check the output device and speech engine.",
                 })
