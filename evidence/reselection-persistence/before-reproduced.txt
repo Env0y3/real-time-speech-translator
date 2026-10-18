@@ -1,0 +1,59 @@
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+.....F..F...F.
+======================================================================
+FAIL: test_guard_survives_zero_devices_and_return_after_restart (test_gui_device_selection.CurrentDeviceSelectionTests.test_guard_survives_zero_devices_and_return_after_restart)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/24b743f0f6b2/translator-reselection/tests/test_gui_device_selection.py", line 216, in test_guard_survives_zero_devices_and_return_after_restart
+    self.assertTrue(self.window.output_combo.currentData(UNAVAILABLE_ROLE))
+AssertionError: None is not true
+
+======================================================================
+FAIL: test_input_and_monitor_guards_are_also_persisted (test_gui_device_selection.CurrentDeviceSelectionTests.test_input_and_monitor_guards_are_also_persisted)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/24b743f0f6b2/translator-reselection/tests/test_gui_device_selection.py", line 228, in test_input_and_monitor_guards_are_also_persisted
+    self.assertTrue(self.window.input_combo.currentData(UNAVAILABLE_ROLE))
+AssertionError: None is not true
+
+======================================================================
+FAIL: test_reselection_guard_survives_save_refresh_and_restart (test_gui_device_selection.CurrentDeviceSelectionTests.test_reselection_guard_survives_save_refresh_and_restart)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/24b743f0f6b2/translator-reselection/tests/test_gui_device_selection.py", line 182, in test_reselection_guard_survives_save_refresh_and_restart
+    self.assertTrue(self.window.output_combo.currentData(UNAVAILABLE_ROLE))
+AssertionError: None is not true
+
+----------------------------------------------------------------------
+Ran 14 tests in 0.549s
+
+FAILED (failures=3)

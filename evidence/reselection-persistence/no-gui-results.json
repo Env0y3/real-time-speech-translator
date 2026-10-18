@@ -1,0 +1,177 @@
+{
+  "planned": 107,
+  "executed": 107,
+  "passed": 66,
+  "assertion_failures": 0,
+  "module_import_errors": 0,
+  "other_errors": 0,
+  "skipped": 41,
+  "not_run": 0,
+  "complete": true,
+  "skipped_tests": [
+    {
+      "test": "test_failure_gui_flow.FailureGUIFlowTests.test_actual_tts_failures_reach_gui_and_stop_without_overwrite",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_failure_gui_flow.FailureGUIFlowTests.test_error_callback_requests_stop_before_gui_delivery",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_failure_gui_flow.FailureGUIFlowTests.test_service_and_partial_errors_survive_actual_thread_cleanup",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_close_while_running_requests_graceful_stop",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_device_lists_filter_by_channel_direction",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_device_selection_is_saved_and_restored_by_name",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_explicit_config_index_is_resolved_and_saved_with_name",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_failed_initial_enumeration_preserves_saved_identity",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_failed_refresh_blocks_stale_routes",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_initialization_error_does_not_keep_loading_message",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_language_switch_updates_ui_and_is_persisted",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_latency_shows_both_boundaries_and_write_approximation",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_missing_api_key_is_localized_without_starting",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_missing_monitor_only_blocks_when_enabled",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_missing_saved_device_stays_unavailable_without_crashing",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_missing_translation_output_blocks_even_with_monitor_disabled",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_monitor_dropdown_tracks_checkbox",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_persisted_index_only_requires_reselection",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_pipeline_events_update_text_and_trace_latency",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_playback_error_stops_worker_and_preserves_error_status",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_real_initialization_signal_enables_start",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_reused_index_does_not_restore_missing_name_and_reselection_saves",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_start_stop_and_restart_keep_ui_responsive",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_startup_is_loading_and_start_is_disabled",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_text_history_is_limited",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_virtual_cable_absence_is_nonfatal_notice",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui.MainWindowTests.test_zero_audio_devices_is_explicit_and_blocks_runtime",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui_device_selection.CurrentDeviceSelectionTests.test_changed_device_properties_invalidate_duplicate_choice",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui_device_selection.CurrentDeviceSelectionTests.test_device_changes_fail_closed_until_explicit_reselection",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui_device_selection.CurrentDeviceSelectionTests.test_explicit_duplicate_input_and_monitor_survive_repeated_refresh",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui_device_selection.CurrentDeviceSelectionTests.test_explicit_duplicate_output_survives_unchanged_prestart_refresh",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui_device_selection.CurrentDeviceSelectionTests.test_failed_enumeration_invalidates_duplicate_choice",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui_device_selection.CurrentDeviceSelectionTests.test_guard_survives_zero_devices_and_return_after_restart",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui_device_selection.CurrentDeviceSelectionTests.test_historical_duplicate_can_be_explicitly_reselected_then_started",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui_device_selection.CurrentDeviceSelectionTests.test_historical_duplicate_is_unavailable_even_at_saved_index",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui_device_selection.CurrentDeviceSelectionTests.test_input_and_monitor_guards_are_also_persisted",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui_device_selection.CurrentDeviceSelectionTests.test_live_selection_proof_is_not_persisted",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui_device_selection.CurrentDeviceSelectionTests.test_persisted_guard_only_clears_on_explicit_selection",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui_device_selection.CurrentDeviceSelectionTests.test_remaining_same_name_peer_is_not_an_automatic_replacement",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui_device_selection.CurrentDeviceSelectionTests.test_reselection_guard_survives_save_refresh_and_restart",
+      "reason": "PySide6 is not installed"
+    },
+    {
+      "test": "test_gui_device_selection.CurrentDeviceSelectionTests.test_system_default_is_explicit_recovery_after_snapshot_changes",
+      "reason": "PySide6 is not installed"
+    }
+  ]
+}

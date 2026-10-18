@@ -1,0 +1,12 @@
+{
+  "planned": 107,
+  "executed": 107,
+  "passed": 107,
+  "assertion_failures": 0,
+  "module_import_errors": 0,
+  "other_errors": 0,
+  "skipped": 0,
+  "not_run": 0,
+  "complete": true,
+  "skipped_tests": []
+}

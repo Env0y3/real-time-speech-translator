@@ -1,0 +1,43 @@
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+Fontconfig error: No writable cache directories
+.....F.........
+======================================================================
+FAIL: test_failed_refresh_persists_duplicate_refusal_before_restart (test_gui_device_selection.CurrentDeviceSelectionTests.test_failed_refresh_persists_duplicate_refusal_before_restart)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/24b743f0f6b2/translator-reselection/tests/test_gui_device_selection.py", line 243, in test_failed_refresh_persists_duplicate_refusal_before_restart
+    self.assertTrue(self.window.output_combo.currentData(UNAVAILABLE_ROLE))
+AssertionError: None is not true
+
+----------------------------------------------------------------------
+Ran 15 tests in 0.471s
+
+FAILED (failures=1)

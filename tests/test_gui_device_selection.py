@@ -169,6 +169,86 @@ class CurrentDeviceSelectionTests(unittest.TestCase):
         self.window.refresh_devices()
         self.assertIsNone(self.window._runtime_options().translation_output_device)
 
+    def test_reselection_guard_survives_save_refresh_and_restart(self):
+        self._select_output()
+        self.devices = self.devices[:3]
+        self.window.refresh_devices()
+        self.window._save_settings()
+        self.window.close()
+        self.window = self._new_window()
+        for _ in range(3):
+            self.window.refresh_devices()
+            self.window._save_settings()
+            self.assertTrue(self.window.output_combo.currentData(UNAVAILABLE_ROLE))
+        worker, validate, create = self._start_with_mocks()
+        create.assert_not_called()
+        validate.assert_not_called()
+        self.assertTrue(json.loads(self.settings_path.read_text())[
+            "translation_output_device"]["requires_reselection"])
+        self._select_output(2)
+        worker, _, create = self._start_with_mocks()
+        create.assert_called_once()
+        worker.start.assert_called_once_with()
+        self.assertNotIn("requires_reselection", json.loads(
+            self.settings_path.read_text())["translation_output_device"])
+
+    def test_persisted_guard_only_clears_on_explicit_selection(self):
+        self._select_output()
+        self.devices = self.devices[:3]
+        self.window.refresh_devices()
+        self.window.close()
+        self.window = self._new_window()
+        self.window.output_combo.setCurrentIndex(0)
+        self.window.refresh_devices()
+        self.window.close()
+        self.window = self._new_window()
+        self.assertIsNone(self.window._runtime_options().translation_output_device)
+        self.assertNotIn("requires_reselection", json.loads(
+            self.settings_path.read_text())["translation_output_device"])
+
+    def test_guard_survives_zero_devices_and_return_after_restart(self):
+        self._select_output()
+        self.devices = []
+        self.window.refresh_devices()
+        self.window.close()
+        self.devices = [AudioDeviceInfo(2, "Speakers", 0, 2, 48_000)]
+        self.window = self._new_window()
+        self.assertTrue(self.window.output_combo.currentData(UNAVAILABLE_ROLE))
+        with self.assertRaises(AudioRoutingError):
+            self.window._runtime_options()
+
+    def test_input_and_monitor_guards_are_also_persisted(self):
+        self.window.input_combo.setCurrentIndex(self.window.input_combo.findData(1))
+        self.window.monitor_combo.setCurrentIndex(self.window.monitor_combo.findData(3))
+        self.window.monitor_checkbox.setChecked(True)
+        self.devices = [self.devices[0], self.devices[2]]
+        self.window.refresh_devices()
+        self.window.close()
+        self.window = self._new_window()
+        self.assertTrue(self.window.input_combo.currentData(UNAVAILABLE_ROLE))
+        self.assertTrue(self.window.monitor_combo.currentData(UNAVAILABLE_ROLE))
+        self.window.input_combo.setCurrentIndex(0)
+        with self.assertRaises(AudioRoutingError):
+            self.window._runtime_options()
+        self.window.monitor_combo.setCurrentIndex(0)
+        self.window._runtime_options()
+
+    def test_failed_refresh_persists_duplicate_refusal_before_restart(self):
+        self._select_output()
+        with patch("gui.main_window.list_audio_devices", side_effect=RuntimeError("offline")):
+            self.window.refresh_devices()
+        self.window.close()
+        self.devices = self.devices[:3]
+        self.window = self._new_window()
+        self.assertTrue(self.window.output_combo.currentData(UNAVAILABLE_ROLE))
+        worker, validate, create = self._start_with_mocks()
+        create.assert_not_called()
+        validate.assert_not_called()
+        self._select_output(2)
+        worker, _, create = self._start_with_mocks()
+        create.assert_called_once()
+        worker.start.assert_called_once_with()
+
     def test_live_selection_proof_is_not_persisted(self):
         self._select_output()
         self.window.refresh_devices()

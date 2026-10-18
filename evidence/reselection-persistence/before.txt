@@ -1,0 +1,24 @@
+E
+======================================================================
+ERROR: test_gui_device_selection (unittest.loader._FailedTest.test_gui_device_selection)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_gui_device_selection
+Traceback (most recent call last):
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/loader.py", line 396, in _find_test_path
+    module = self._get_module_from_name(name)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/loader.py", line 339, in _get_module_from_name
+    __import__(name)
+  File "/workspace/scratch/24b743f0f6b2/translator-reselection/tests/test_gui_device_selection.py", line 20, in <module>
+    from core.audio_devices import AudioDeviceInfo, AudioRoutingError
+  File "/workspace/scratch/24b743f0f6b2/translator-reselection/core/audio_devices.py", line 3, in <module>
+    import sounddevice as sd
+  File "/tmp/reselect-gui/lib/python3.12/site-packages/sounddevice.py", line 73, in <module>
+    raise OSError('PortAudio library not found')
+OSError: PortAudio library not found
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+FAILED (errors=1)

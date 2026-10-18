@@ -524,6 +524,22 @@ class MainWindow(QMainWindow):
             self._clear_error()
         except Exception as error:
             self._devices_available = False
+            # Enumeration failure revokes live duplicate-name trust. Persist the
+            # refusal before close/restart, even if only one peer later returns.
+            for combo in (self.input_combo, self.output_combo, self.monitor_combo):
+                name = combo.currentData(DEVICE_NAME_ROLE)
+                if name and sum(
+                    str(combo.itemData(i, DEVICE_NAME_ROLE) or "").casefold()
+                    == name.casefold()
+                    for i in range(1, combo.count())
+                    if not combo.itemData(i, UNAVAILABLE_ROLE)
+                ) > 1:
+                    index = combo.currentIndex()
+                    combo.setItemData(index, True, RESELECTION_REQUIRED_ROLE)
+                    combo.setItemData(index, True, UNAVAILABLE_ROLE)
+                    combo.setItemText(index, tr(
+                        "device_unavailable", self.language, name=name,
+                    ))
             self._show_error_key(
                 "device_refresh_failed",
                 detail=str(error),
@@ -552,6 +568,10 @@ class MainWindow(QMainWindow):
         # same-name peer cannot prove identity. Keep the prompt until the user
         # selects a real item again, rather than restoring that peer next time.
         requires_reselection = bool(combo.currentData(RESELECTION_REQUIRED_ROLE))
+        # Persist only the refusal, never the temporary enumeration proof.
+        # A fresh window must not accept a same-name survivor after ambiguity.
+        if isinstance(selected_device, dict):
+            requires_reselection |= selected_device.get("requires_reselection") is True
         if not current_choice and selected_name:
             requires_reselection |= sum(
                 str(combo.itemData(i, DEVICE_NAME_ROLE) or "").casefold()
@@ -625,14 +645,23 @@ class MainWindow(QMainWindow):
     def _device_selection(combo: QComboBox) -> dict:
         index = combo.currentData()
         name = combo.currentData(DEVICE_NAME_ROLE)
-        return {"index": index, "name": name}
+        selection = {"index": index, "name": name}
+        if combo.currentData(RESELECTION_REQUIRED_ROLE):
+            selection["requires_reselection"] = True
+        return selection
 
     def _monitor_setting_changed(self, enabled: bool) -> None:
         self._update_monitor_enabled(enabled)
         self._save_settings()
 
     def _save_settings(self) -> None:
-        if not self._settings_ready or not self._devices_available:
+        # A zero-device enumeration can invalidate an ambiguous choice too.
+        # Save its refusal so plugging in a peer after restart cannot bypass it.
+        if not self._settings_ready or not all(
+            combo.count() for combo in
+            (self.input_combo, self.output_combo, self.monitor_combo)
+        ):
+            # A failed initial enumeration has no combo state to serialize.
             return
         self._update_device_notices()
         settings = {
@@ -651,6 +680,11 @@ class MainWindow(QMainWindow):
             print(f"[User Settings Warning] {type(error).__name__}")
 
     def _update_device_notices(self) -> None:
+        if any(combo.currentData(RESELECTION_REQUIRED_ROLE) for combo in
+               (self.input_combo, self.output_combo, self.monitor_combo)):
+            self._notice_keys.add("device_reselection_required")
+        else:
+            self._notice_keys.discard("device_reselection_required")
         for combo, key in (
             (self.input_combo, "saved_input_missing"),
             (self.output_combo, "saved_output_missing"),
